@@ -1,0 +1,156 @@
+{
+  "artworkPixelMeasurements" : [
+    {
+      "asset" : "hero",
+      "colorFraction" : 0.34375,
+      "luminanceStandardDeviation" : 0.12253344096746958
+    },
+    {
+      "asset" : "video",
+      "colorFraction" : 0.6654523375834851,
+      "luminanceStandardDeviation" : 0.23919330658660662
+    },
+    {
+      "asset" : "audio",
+      "colorFraction" : 0.30722525804493017,
+      "luminanceStandardDeviation" : 0.17193030743568971
+    },
+    {
+      "asset" : "code",
+      "colorFraction" : 0.70617906683480458,
+      "luminanceStandardDeviation" : 0.23553841634829173
+    },
+    {
+      "asset" : "design",
+      "colorFraction" : 0.12484237074401008,
+      "luminanceStandardDeviation" : 0.17200563142985664
+    }
+  ],
+  "checks" : [
+    "All five native artwork regions pass screenshot contrast and color checks",
+    "Light theme remains light under OS dark mode",
+    "Dark option and prefilled idea form render",
+    "No browsing or rendering action creates or changes task execution",
+    "Empty first-run state contains no invented staff or tasks",
+    "Real PTY emits Chinese and ANSI output decoded by the emulator, and reopens the same session",
+    "Six areas and renamed employee membership survive SQLite reload",
+    "Task and employee identities survive workspace editing"
+  ],
+  "fixture" : "Local printf tool, four default areas, eight employees, twelve unexecuted drafts. No network calls or user-data writes.",
+  "limitations" : [
+    "Rendered owned SwiftUI components offscreen; desktop keyboard, IME, clipboard, VoiceOver and hardware manual QA remain separate.",
+    "Offscreen host did not expose navigation control employees; no AX interaction coverage claimed.",
+    "Offscreen host did not expose navigation control knowledge; no AX interaction coverage claimed.",
+    "Offscreen host did not expose navigation control workflow; no AX interaction coverage claimed.",
+    "Offscreen host did not expose navigation control home; no AX interaction coverage claimed."
+  ],
+  "navigationActionChecks" : [
+
+  ],
+  "passed" : true,
+  "screenshots" : [
+    {
+      "height" : 1008,
+      "name" : "native-v05-home-1560",
+      "osDark" : false,
+      "path" : "\/Users\/ocean\/workspace\/own-project\/my-workbench\/work\/studio-v05-qa\/native-v05-home-1560.png",
+      "width" : 1560
+    },
+    {
+      "height" : 900,
+      "name" : "native-v05-home-1440",
+      "osDark" : false,
+      "path" : "\/Users\/ocean\/workspace\/own-project\/my-workbench\/work\/studio-v05-qa\/native-v05-home-1440.png",
+      "width" : 1440
+    },
+    {
+      "height" : 720,
+      "name" : "native-v05-home-compact",
+      "osDark" : true,
+      "path" : "\/Users\/ocean\/workspace\/own-project\/my-workbench\/work\/studio-v05-qa\/native-v05-home-compact.png",
+      "width" : 1100
+    },
+    {
+      "height" : 900,
+      "name" : "native-v05-dark-home",
+      "osDark" : true,
+      "path" : "\/Users\/ocean\/workspace\/own-project\/my-workbench\/work\/studio-v05-qa\/native-v05-dark-home.png",
+      "width" : 1440
+    },
+    {
+      "height" : 900,
+      "name" : "native-v05-employees",
+      "osDark" : false,
+      "path" : "\/Users\/ocean\/workspace\/own-project\/my-workbench\/work\/studio-v05-qa\/native-v05-employees.png",
+      "width" : 1440
+    },
+    {
+      "height" : 900,
+      "name" : "native-v05-knowledge",
+      "osDark" : false,
+      "path" : "\/Users\/ocean\/workspace\/own-project\/my-workbench\/work\/studio-v05-qa\/native-v05-knowledge.png",
+      "width" : 1440
+    },
+    {
+      "height" : 900,
+      "name" : "native-v05-workflow",
+      "osDark" : false,
+      "path" : "\/Users\/ocean\/workspace\/own-project\/my-workbench\/work\/studio-v05-qa\/native-v05-workflow.png",
+      "width" : 1440
+    },
+    {
+      "height" : 1008,
+      "name" : "native-v05-empty",
+      "osDark" : false,
+      "path" : "\/Users\/ocean\/workspace\/own-project\/my-workbench\/work\/studio-v05-qa\/native-v05-empty.png",
+      "width" : 1560
+    },
+    {
+      "height" : 660,
+      "name" : "native-v05-idea-draft",
+      "osDark" : false,
+      "path" : "\/Users\/ocean\/workspace\/own-project\/my-workbench\/work\/studio-v05-qa\/native-v05-idea-draft.png",
+      "width" : 600
+    },
+    {
+      "height" : 900,
+      "name" : "native-v05-terminal-employee",
+      "osDark" : false,
+      "path" : "\/Users\/ocean\/workspace\/own-project\/my-workbench\/work\/studio-v05-qa\/native-v05-terminal-employee.png",
+      "width" : 1440
+    },
+    {
+      "height" : 720,
+      "name" : "native-v05-terminal-compact",
+      "osDark" : false,
+      "path" : "\/Users\/ocean\/workspace\/own-project\/my-workbench\/work\/studio-v05-qa\/native-v05-terminal-compact.png",
+      "width" : 1100
+    },
+    {
+      "height" : 558,
+      "name" : "native-v05-workspace-edit",
+      "osDark" : false,
+      "path" : "\/Users\/ocean\/workspace\/own-project\/my-workbench\/work\/studio-v05-qa\/native-v05-workspace-edit.png",
+      "width" : 760
+    },
+    {
+      "height" : 1100,
+      "name" : "native-v05-six-areas",
+      "osDark" : false,
+      "path" : "\/Users\/ocean\/workspace\/own-project\/my-workbench\/work\/studio-v05-qa\/native-v05-six-areas.png",
+      "width" : 1440
+    }
+  ],
+  "terminalOutputVerified" : "中文终端验证 ✓",
+  "terminalPixelMeasurements" : [
+    {
+      "luminanceStandardDeviation" : 0.031638484957139452,
+      "screenshot" : "native-v05-terminal-employee"
+    },
+    {
+      "luminanceStandardDeviation" : 0.04618315493934011,
+      "screenshot" : "native-v05-terminal-compact"
+    }
+  ],
+  "workspace" : "\/Users\/ocean\/workspace\/own-project\/my-workbench\/work\/studio-v05-qa\/63BE5E76-EDDD-48A4-B5E9-CF340581F489"
+}

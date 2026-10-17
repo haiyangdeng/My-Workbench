@@ -1,0 +1,11 @@
+# 工作站图标生成记录
+
+使用内置imagegen生成并编辑，最终图像保存为master.png，concept.png保留第一稿。install_app_icon.py仅用macOS sips导出平台要求的分辨率，不改变主体设计。
+
+## 生成提示词
+
+Use case: stylized-concept. Asset type: production macOS app icon for My Workbench, a personal AI employee studio. Create ONE exceptional polished icon, square 1024x1024 PNG with real transparent pixels outside the icon. An oversized soft-corner rounded-square macOS tile, aligned front-on, occupies about 88 percent of the canvas with generous but modest transparent margin. Warm ivory ceramic tile with fine beveled edge and gentle ambient shadow. Center a distinctive dimensional architectural W mark: three stout folded ribbons of sage green matte ceramic form an elegant open miniature workspace / desk, with four small inset rounded workstation pads in muted terracotta, dusty lavender, slate blue, and pale sage arranged within the W workspace; restrained inset warm luminous detail suggests AI collaborators. Beautiful tactile 3D material, subtle paper grain, precisely designed form, large bold silhouette readable at 32 pixels. Palette corresponds to warm-white #F4F3EE, sage #58735E, terra-cotta #B97255, lavender #8D7D9A, slate-blue #658398. Perspective minimal, icon stays symmetrical and grounded. Soft upper-left studio lighting. Sophisticated contemporary macOS productivity icon, distinctive and crafted, not generic. No text, no letters printed as typography, no watermark, no mockup desk or screen, no extra objects outside the tile, no small UI labels. Genuine alpha transparency surrounding the rounded tile.
+
+## 编辑提示词
+
+Edit this image for final production macOS app icon. Keep the exact distinctive green W-shaped miniature four-person studio, colors, lighting, ceramic texture, ivory rounded-square tile, framing and all interior details unchanged. Only clean the alpha silhouette: remove every stray white dot, isolated speck, ragged halo, or isolated opaque pixel outside the main rounded-square tile and its very subtle clean shadow. The transparent exterior must be completely clean with a smooth premium macOS rounded-square outline, no disconnected particles. No redesign, no text, no additional elements. Output a single square PNG with genuine transparent background.
