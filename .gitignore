@@ -6,3 +6,44 @@ xcuserdata/
 .DS_Store
 work/
 releases/
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# Xcode 用户配置
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad
+
+# Xcode 构建产物
+DerivedData/
+build/
+.build/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+
+# Swift Package Manager
+Packages/
+
+# 临时文件
+*.log
+*.tmp
+*.swp
+
+# 发布产物
+*.app
+*.dmg
+*.ipa
+*.xcarchive
+*.dSYM/
+*.dSYM.zip
+
+# 环境配置与密钥
+.env
+.env.local
+.env.*.local
+*.p12
+*.mobileprovision
+
+# 临时工作目录（确认无重要文件后启用）
+# work/
