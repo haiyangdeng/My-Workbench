@@ -25,7 +25,7 @@ doc.styles['Heading 1'].paragraph_format.space_before = Pt(10)
 for border in doc.styles.element.xpath('.//w:pBdr'):
     border.getparent().remove(border)
 doc.core_properties.title = 'AI员工工作台产品需求文档'
-doc.core_properties.author = 'My Workbench'
+doc.core_properties.author = 'Workbench'
 
 def text_runs(p, text):
     for part in re.split(r'(\[[^\]]+\]\(https?://[^)]+\))', text):
@@ -86,7 +86,7 @@ while i < len(lines):
     else: text_runs(doc.add_paragraph(), line)
     i += 1
 footer = section.footer.paragraphs[0]; footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-footer.add_run('My Workbench  |  ')
+footer.add_run('Workbench  |  ')
 field = OxmlElement('w:fldSimple'); field.set(qn('w:instr'), 'PAGE'); footer._p.append(field)
 for r in footer.runs: r.font.size = Pt(9); r.font.color.rgb = RGBColor(90, 90, 90)
 doc.save(ROOT / 'docs/AI员工工作台_PRD_v0.3.docx')

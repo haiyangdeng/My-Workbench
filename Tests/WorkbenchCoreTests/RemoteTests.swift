@@ -119,4 +119,38 @@ final class RemoteTests: XCTestCase {
         XCTAssertThrowsError(try SSHConnection(hostAlias: "-oProxyCommand=bad").arguments())
         XCTAssertThrowsError(try SSHConnection(hostAlias: "server; command").arguments())
     }
+
+    func testHealthReadsGPUQueueAndCancelSupport() async throws {
+        let client = try client { request in
+            switch request.url!.path {
+            case "/system_stats": return self.response(#"{"system":{"comfyui_version":"0.3.60"},"devices":[{"name":"cuda:0 NVIDIA RTX 4090","vram_total":25757220864,"vram_free":20000000000}]}"#)
+            case "/queue": return self.response(#"{"queue_running":[[0,"a",{}]],"queue_pending":[[1,"b",{}],[2,"c",{}]]}"#)
+            case "/api/jobs": return self.response(#"{"jobs":[]}"#)
+            default: return (404, [:], Data())
+            }
+        }
+        let health = try await client.health()
+        XCTAssertEqual(health.version, "0.3.60"); XCTAssertEqual(health.gpu, "cuda:0 NVIDIA RTX 4090"); XCTAssertEqual(health.vramTotal, 25757220864)
+        XCTAssertEqual(health.queueLength, 3); XCTAssertTrue(health.supportsJobCancel && health.usable)
+        let old = try self.client { request in request.url!.path == "/system_stats" ? self.response(#"{"system":{}}"#) : (404, [:], Data()) }
+        let oldHealth = try await old.health()
+        XCTAssertFalse(oldHealth.supportsJobCancel || oldHealth.usable, "A server without single-job cancel is not usable for jobs")
+    }
+
+    func testUploadSendsMultipartAndChecksSize() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()) ref.png")
+        try Data(repeating: 7, count: 64).write(to: file); defer { try? FileManager.default.removeItem(at: file) }
+        var seen: Data?
+        let client = try client { request in
+            XCTAssertEqual(request.url!.path, "/upload/image"); XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertTrue(request.value(forHTTPHeaderField: "Content-Type")!.hasPrefix("multipart/form-data; boundary="))
+            seen = self.body(request)
+            return self.response(#"{"name":"ref (1).png","subfolder":"workbench","type":"input"}"#)
+        }
+        let name = try await client.upload(file, maximumBytes: 1024)
+        XCTAssertEqual(name, "workbench/ref (1).png")
+        let text = String(decoding: seen ?? Data(), as: UTF8.self)
+        XCTAssertTrue(text.contains("name=\"subfolder\"") && text.contains("workbench") && text.contains("name=\"image\"; filename="))
+        do { _ = try await client.upload(file, maximumBytes: 10); XCTFail("Oversized upload must be refused") } catch { XCTAssertEqual(error as? MediaError, .uploadTooLarge) }
+    }
 }

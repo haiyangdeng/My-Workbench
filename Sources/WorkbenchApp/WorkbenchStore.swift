@@ -5,44 +5,60 @@ import SwiftUI
 final class WorkbenchStore: ObservableObject {
     @Published var snapshot = WorkspaceSnapshot()
     @Published var errorMessage: String?
+    @Published var pendingDeletion: DeletionTarget?
     @Published private(set) var storageAvailable = true
-    @Published private(set) var activeRuns: [UUID: UUID] = [:]
+    @Published var activeRuns: [UUID: UUID] = [:]
+    /// Chat turns in progress: message ID → run ID.
+    @Published var activeTurns: [UUID: UUID] = [:]
+    /// Text and tool activity streamed so far, keyed by chat message ID or task ID.
+    @Published var liveTurns: [UUID: LiveTurn] = [:]
+    @Published var serverHealth: [UUID: ServerHealth] = [:]
+    /// Team steps whose git worktree is being created (TM-08).
+    var preparingWorktrees: Set<UUID> = []
+    /// A variant job's run ID → the task run it belongs to (MD-13), for cancel and records.
+    var remoteAliases: [UUID: UUID] = [:]
     @Published var activeProjectID: UUID?
     @Published var concurrencyLimit = 1
-    @Published private(set) var probingTools: Set<UUID> = []
+    @Published var probingTools: Set<UUID> = []
     @Published private(set) var tunnelTools: Set<UUID> = []
     @Published private(set) var downloadingFiles: Set<UUID> = []
     @Published private(set) var remoteChecks: [UUID: String] = [:]
     @Published private(set) var loginChecks: [UUID: LoginCheck] = [:]
+    @Published var testPrompts: [UUID: TestPromptResult] = [:]
+    /// Set when work needs a CLI whose executable is gone; the view offers "Fix path".
+    @Published var missingCLIToolID: UUID?
+    @Published var shellSearchPath: String?
     private let tunnelRunner = ProcessRunner()
     private var tunnelIDs: [UUID: UUID] = [:]
     private var remoteSessions: [UUID: ComfyClient] = [:]
     private var remoteCancelled: Set<UUID> = []
     private var remoteStopRequested: Set<UUID> = []
-    var runningID: UUID? { activeRuns.keys.first }
-    var currentProject: WorkProject? { snapshot.projects.first { $0.id == activeProjectID } }
-    var visibleTasks: [WorkTask] { snapshot.tasks.filter { $0.archivedAt == nil } }
-    var archivedDrafts: [WorkTask] { snapshot.tasks.filter { $0.archivedAt != nil } }
-    var workspaces: [WorkArea] { snapshot.workspaces.sorted { $0.sortIndex < $1.sortIndex } }
-    func employees(in area: WorkArea) -> [Employee] { snapshot.employees.filter { $0.workspaceID == area.id } }
+    var runningID: UUID? { activeRuns.keys.first ?? activeTurns.keys.first }
+    var currentProject: WorkProject? { snapshot.projects.current.first { $0.id == activeProjectID } }
+    var visibleTasks: [WorkTask] { snapshot.tasks.current.filter { $0.archivedAt == nil } }
+    var archivedDrafts: [WorkTask] { snapshot.tasks.current.filter { $0.archivedAt != nil } }
+    var workspaces: [WorkArea] { snapshot.workspaces.current.sorted { $0.sortIndex < $1.sortIndex } }
+    func employees(in area: WorkArea) -> [Employee] { snapshot.employees.current.filter { $0.workspaceID == area.id || ($0.additionalWorkspaceIDs ?? []).contains(area.id) } }
+    var cliTools: [ToolConfig] { snapshot.tools.current.filter(\.isCLI) }
+    var hasCLI: Bool { !cliTools.isEmpty }
     func tasks(in area: WorkArea) -> [WorkTask] {
         let ids = Set(employees(in: area).map(\.id)); return visibleTasks.filter { ids.contains($0.employeeID) }
     }
     @discardableResult func addWorkspace(_ area: WorkArea) -> Bool {
-        guard validWorkspace(area) else { return false }
+        guard !area.isDeleted, !snapshot.workspaces.contains(where: { $0.id == area.id }), validWorkspace(area) else { return false }
         return change { var added = area; added.sortIndex = ($0.workspaces.map(\.sortIndex).max() ?? -1) + 1; $0.workspaces.append(added) }
     }
     @discardableResult func updateWorkspace(_ area: WorkArea) -> Bool {
-        guard validWorkspace(area), snapshot.workspaces.contains(where: { $0.id == area.id }) else { return false }
+        guard validWorkspace(area), snapshot.workspaces.current.contains(where: { $0.id == area.id && !$0.isDeleted }) else { return false }
         return change { $0.updateWorkspace(area) }
     }
     private func validWorkspace(_ area: WorkArea) -> Bool {
         let name = area.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, name.count <= 40, !snapshot.workspaces.contains(where: { $0.id != area.id && $0.name == name }), area.color.count == 6, UInt32(area.color, radix: 16) != nil else { errorMessage = "工作区名称需唯一且不超过40字，颜色需为有效的六位色值。"; return false }
+        guard !name.isEmpty, name.count <= 40, !snapshot.workspaces.current.contains(where: { $0.id != area.id && $0.name == name }), area.color.count == 6, UInt32(area.color, radix: 16) != nil else { errorMessage = "工作区名称需唯一且不超过40字，颜色需为有效的六位色值。"; return false }
         return true
     }
     private let persistence: WorkspacePersistence
-    private let runner = ProcessRunner()
+    let runner = ProcessRunner()
     let archive: RunArchive
 
     init(fileURL: URL? = nil) {
@@ -57,10 +73,15 @@ final class WorkbenchStore: ObservableObject {
             let oldRunCount = snapshot.runs.count
             try snapshot.migrateLegacyRuns(archive: archive)
             if snapshot.runs.count != oldRunCount { try persistence.save(snapshot) }
-            activeProjectID = snapshot.projects.first?.id
+            activeProjectID = snapshot.projects.current.first(where: { !$0.isArchived })?.id
             // Persist recovery so no interrupted queue is resumed implicitly.
-            if snapshot.tasks.contains(where: { $0.status == .interrupted }) { try persistence.save(snapshot) }
+            if snapshot.tasks.contains(where: { $0.status == .interrupted }) || snapshot.messages.contains(where: { $0.state == .interrupted }) { try persistence.save(snapshot) }
         } catch { storageAvailable = false; errorMessage = "读取数据失败，原文件已保留。\n\(error.localizedDescription)" }
+        Task {
+            shellSearchPath = await LoginShell.lookup("true").searchPath
+            // TL-12: re-read versions quietly at launch; a change is flagged on the CLI card.
+            for tool in snapshot.tools.current where tool.isCLI && tool.detectedVersion != nil && tool.executableAvailable && !(tool.versionArguments ?? ["--version"]).isEmpty { probeTool(tool.id, silent: true) }
+        }
     }
 
     @discardableResult func save() -> Bool {
@@ -68,58 +89,66 @@ final class WorkbenchStore: ObservableObject {
         do { try persistence.save(snapshot); return true }
         catch { errorMessage = "保存失败：\(error.localizedDescription)"; return false }
     }
-    @discardableResult private func change(_ body: (inout WorkspaceSnapshot) -> Void) -> Bool {
+    @discardableResult func change(_ body: (inout WorkspaceSnapshot) -> Void) -> Bool {
         guard storageAvailable else { return false }
         let previous = snapshot; body(&snapshot)
         if save() { return true }; snapshot = previous; return false
     }
-    @discardableResult func addTool(_ tool: ToolConfig) -> Bool { change { $0.tools.append(tool) } }
+    @discardableResult func addTool(_ tool: ToolConfig) -> Bool {
+        guard !tool.isDeleted, !snapshot.tools.contains(where: { $0.id == tool.id }) else { return false }
+        return change { $0.tools.append(tool.migratingLegacyAdapter()) }
+    }
     @discardableResult func updateTool(_ tool: ToolConfig) -> Bool {
-        guard let index = snapshot.tools.firstIndex(where: { $0.id == tool.id }) else { return false }
-        let old = snapshot.tools[index]
+        guard let index = snapshot.tools.firstIndex(where: { $0.id == tool.id && !$0.isDeleted }) else { return false }
+        let old = snapshot.tools[index], tool = tool.migratingLegacyAdapter()
         let saved = change { $0.tools[index] = tool }
-        if saved && (old.executable != tool.executable || old.adapter != tool.adapter || old.loginStatusArguments != tool.loginStatusArguments) { loginChecks.removeValue(forKey: tool.id) }
+        if saved && (old.executable != tool.executable || old.adapter != tool.adapter || old.loginStatusArguments != tool.loginStatusArguments || old.loggedOutText != tool.loggedOutText) { loginChecks.removeValue(forKey: tool.id) }
+        if saved && old != tool { testPrompts.removeValue(forKey: tool.id) }
+        if saved && missingCLIToolID == tool.id && tool.executableAvailable { missingCLIToolID = nil }
         return saved
     }
-    @discardableResult func addEmployee(_ employee: Employee) -> Bool { change { $0.employees.append(employee); $0.migrateWorkspaces() } }
+    @discardableResult func addEmployee(_ employee: Employee) -> Bool {
+        guard !employee.isDeleted, !snapshot.employees.contains(where: { $0.id == employee.id }),
+              !employee.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, tool(employee.toolID)?.isDeleted == false else { errorMessage = "请填写员工姓名，并绑定可用的工具。"; return false }
+        return change { $0.employees.append(employee); $0.migrateWorkspaces() }
+    }
     @discardableResult func updateEmployee(_ employee: Employee) -> Bool {
-        guard let index = snapshot.employees.firstIndex(where: { $0.id == employee.id }) else { return false }
+        guard let index = snapshot.employees.firstIndex(where: { $0.id == employee.id && !$0.isDeleted }) else { return false }
+        guard !employee.isDeleted, !employee.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, tool(employee.toolID)?.isDeleted == false else { errorMessage = "请填写员工姓名，并绑定可用的工具。"; return false }
         return change { $0.employees[index] = employee; $0.migrateWorkspaces() }
     }
     @discardableResult func addProject(_ project: WorkProject) -> Bool {
-        let success = change { $0.projects.append(project) }; if success { activeProjectID = project.id }; return success
+        guard !project.isDeleted, !snapshot.projects.contains(where: { $0.id == project.id }) else { return false }
+        var added = project; added.createdAt = added.createdAt ?? Date()
+        guard added.categoryID == nil || category(added.categoryID) != nil else { return false }
+        let success = change { $0.projects.append(added) }; if success { activeProjectID = added.id }; return success
     }
     @discardableResult func addTask(_ task: WorkTask) -> Bool {
-        guard let employee = employee(task.employeeID), employee.enabled ?? true else { errorMessage = "此员工已停用或不存在，请选择其他负责人。"; return false }
+        guard !task.isDeleted, !snapshot.tasks.contains(where: { $0.id == task.id }) else { return false }
+        let mediaOwner = (task.generation != nil || task.command != nil) && (task.employeeID == Self.manualOwnerID || employee(task.employeeID) != nil)
+        guard mediaOwner || (employee(task.employeeID).map { $0.enabled ?? true } ?? false) else { errorMessage = "此员工已停用或不存在，请选择其他负责人。"; return false }
+        guard !isArchived(projectID: task.projectID) else { errorMessage = WorkbenchStore.archivedProjectMessage; return false }
         return change { $0.tasks.insert(task, at: 0) }
     }
     @discardableResult func archiveDraft(_ id: UUID) -> Bool {
-        guard let index = snapshot.tasks.firstIndex(where: { $0.id == id && $0.status == .draft && $0.archivedAt == nil && $0.planID == nil }),
+        guard let index = snapshot.tasks.firstIndex(where: { $0.id == id && !$0.isDeleted && $0.status == .draft && $0.archivedAt == nil && $0.planID == nil }),
               runs(for: id).isEmpty, !snapshot.tasks.contains(where: { ($0.dependencyIDs ?? []).contains(id) }) else { errorMessage = "只能移出尚未执行、未参与协作依赖的草稿。"; return false }
         return change { $0.tasks[index].archivedAt = Date() }
     }
     @discardableResult func restoreDraft(_ id: UUID) -> Bool {
-        guard let index = snapshot.tasks.firstIndex(where: { $0.id == id && $0.status == .draft && $0.archivedAt != nil }) else { return false }
+        guard let index = snapshot.tasks.firstIndex(where: { $0.id == id && !$0.isDeleted && $0.status == .draft && $0.archivedAt != nil }) else { return false }
         return change { $0.tasks[index].archivedAt = nil }
     }
     func employee(_ id: UUID) -> Employee? { snapshot.employees.first { $0.id == id } }
     func tool(_ id: UUID) -> ToolConfig? { snapshot.tools.first { $0.id == id } }
     func runs(for taskID: UUID) -> [TaskRun] { snapshot.runs.filter { $0.taskID == taskID }.sorted { $0.startedAt > $1.startedAt } }
-    func artifacts(for runID: UUID) -> [WorkArtifact] { snapshot.artifacts.filter { $0.runID == runID } }
-
-    func addLocalExample() {
-        guard storageAvailable else { return }
-        let tool = ToolConfig(name: "本地输出验证", executable: "/usr/bin/printf", arguments: ["%s\n", "{input}"])
-        let employee = Employee(name: "本地验证员", role: "执行器验证", department: "开发部", instructions: "验证输入原样输出，不调用AI服务。", toolID: tool.id)
-        let task = WorkTask(title: "验证第一条本地任务", employeeID: employee.id, input: "你好，My Workbench。输入包含空格；符号也按原样输出。", workingDirectory: FileManager.default.homeDirectoryForCurrentUser.path, acceptance: "日志中完整显示输入，退出码为0，再手动验收。")
-        change { $0.tools.append(tool); $0.employees.append(employee); $0.migrateWorkspaces(); $0.tasks.insert(task, at: 0) }
-    }
+    func artifacts(for runID: UUID) -> [WorkArtifact] { snapshot.artifacts.current.filter { $0.runID == runID } }
 
     func loginCheck(for tool: ToolConfig) -> LoginCheck {
         loginChecks[tool.id] ?? LoginCheck(state: tool.authenticationStatusArguments == nil ? .unsupported : .unknown)
     }
     func checkLogin(_ id: UUID) {
-        guard let original = tool(id), loginChecks[id]?.state != .checking else { return }
+        guard let original = tool(id), !original.isDeleted, loginChecks[id]?.state != .checking else { return }
         guard let arguments = original.authenticationStatusArguments else { loginChecks[id] = LoginCheck(state: .unsupported); return }
         loginChecks[id] = LoginCheck(state: .checking)
         var probe = original; probe.timeoutSeconds = 10
@@ -130,16 +159,17 @@ final class WorkbenchStore: ObservableObject {
             do {
                 let log = try RunLog(url: logURL)
                 defer { try? log.close() }
-                let result = try await runner.run(id: UUID(), tool: probe, input: "", directory: FileManager.default.homeDirectoryForCurrentUser.path, arguments: arguments, onOutput: { log.append($0.text) })
+                let result = try await runner.run(id: UUID(), tool: probe, input: "", directory: FileManager.default.homeDirectoryForCurrentUser.path, arguments: arguments, environment: environment(for: original), onOutput: { log.append($0.text) })
                 check = LoginCheck.classify(tool: original, result: result, output: log.drain())
+                if check.state == .loggedIn, var current = tool(id), current.versionChanged == true { current.versionChanged = nil; updateTool(current) }
             } catch { check = LoginCheck(state: .failed, checkedAt: Date(), detail: error.localizedDescription) }
-            guard let current = tool(id), current.executable == original.executable, current.adapter == original.adapter, current.loginStatusArguments == original.loginStatusArguments else { return }
+            guard let current = tool(id), current.executable == original.executable, current.adapter == original.adapter, current.loginStatusArguments == original.loginStatusArguments, current.loggedOutText == original.loggedOutText else { return }
             loginChecks[id] = check
         }
     }
 
-    func probeTool(_ id: UUID) {
-        guard let original = tool(id), !probingTools.contains(id) else { return }
+    func probeTool(_ id: UUID, silent: Bool = false) {
+        guard let original = tool(id), !original.isDeleted, !probingTools.contains(id) else { return }
         probingTools.insert(id)
         var probe = original; probe.timeoutSeconds = 10
         let arguments = original.versionArguments ?? ["--version"]
@@ -148,22 +178,31 @@ final class WorkbenchStore: ObservableObject {
             defer { probingTools.remove(id); try? FileManager.default.removeItem(at: logURL) }
             do {
                 let log = try RunLog(url: logURL)
-                let result = try await runner.run(id: UUID(), tool: probe, input: "", directory: FileManager.default.homeDirectoryForCurrentUser.path, arguments: arguments, onOutput: { log.append($0) })
+                let result = try await runner.run(id: UUID(), tool: probe, input: "", directory: FileManager.default.homeDirectoryForCurrentUser.path, arguments: arguments, environment: environment(for: original), onOutput: { log.append($0.text) })
                 let tail = log.drain(); try log.close()
                 guard result.status == .review else { throw NSError(domain: "MyWorkbench.Probe", code: Int(result.exitCode), userInfo: [NSLocalizedDescriptionKey: "版本检测\(result.status.title)：\n\(tail)"]) }
                 if var current = tool(id), current.executable == original.executable {
-                    current.detectedVersion = String(tail.prefix(2000)); updateTool(current)
+                    let detected = String(tail.prefix(2000)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    // TL-12: a different version than last time needs a fresh login check and test.
+                    if let previous = current.detectedVersion?.trimmingCharacters(in: .whitespacesAndNewlines), !previous.isEmpty, previous != detected { current.versionChanged = true; loginChecks.removeValue(forKey: id) }
+                    current.detectedVersion = detected; updateTool(current)
                 }
-            } catch { errorMessage = error.localizedDescription }
+            } catch { if !silent { errorMessage = error.localizedDescription } }
         }
     }
 
     func run(_ id: UUID, feedback: String = "") {
         guard storageAvailable, let index = snapshot.tasks.firstIndex(where: { $0.id == id }),
               ![.running, .queued].contains(snapshot.tasks[index].status) else { return }
-        guard snapshot.tasks[index].archivedAt == nil else { errorMessage = "草稿已移出，请先在项目桌恢复。"; return }
+        guard !snapshot.tasks[index].isDeleted, snapshot.tasks[index].archivedAt == nil else { errorMessage = "草稿已移出，请先在项目桌恢复。"; return }
+        if snapshot.tasks[index].generation != nil || snapshot.tasks[index].command != nil { queueMediaTask(index, feedback: feedback); return }
         guard let employee = employee(snapshot.tasks[index].employeeID), employee.enabled ?? true else { errorMessage = "负责人已停用或不存在，请先检查员工档案。"; return }
         guard let tool = tool(employee.toolID), tool.isEnabled else { errorMessage = "此员工的工具已停用或不存在，请先配置可用工具。"; return }
+        guard !isArchived(projectID: snapshot.tasks[index].projectID) else { errorMessage = WorkbenchStore.archivedProjectMessage; return }
+        if tool.isCLI && !tool.executableAvailable { missingCLIToolID = tool.id; return }
+        if tool.isCLI {
+            do { _ = try accessLevel(for: snapshot.tasks[index], employee: employee, tool: tool) } catch { errorMessage = error.localizedDescription; return }
+        }
         if tool.adapterKind == .comfyUI && tool.remote == nil { errorMessage = "请先配置 ComfyUI 工作流与服务器。"; return }
         if runs(for: id).contains(where: { $0.status == .interrupted && $0.remotePromptID != nil }) { errorMessage = "远程执行状态尚未确认，请先查询已有执行，避免重复提交。"; return }
         if change({ $0.tasks[index].status = .queued; $0.tasks[index].pendingFeedback = feedback }) { schedulePending() }
@@ -171,16 +210,33 @@ final class WorkbenchStore: ObservableObject {
     func schedulePending() {
         guard storageAvailable else { return }
         let capacity = min(2, max(1, concurrencyLimit))
-        for task in snapshot.tasks.reversed() where task.status == .queued && task.archivedAt == nil && activeRuns.count < capacity {
+        // Generation jobs wait on a server, so they count against that server's job limit, not the local task limit.
+        func localRuns() -> Int { activeRuns.values.filter { runID in snapshot.runs.first { $0.id == runID }?.generation == nil }.count }
+        // Oldest first; steps of one plan in plan order.
+        let queued = snapshot.tasks.enumerated().filter { $0.element.status == .queued && $0.element.archivedAt == nil && !$0.element.isDeleted }
+            .sorted { ($0.element.createdAt, -$0.offset) < ($1.element.createdAt, -$1.offset) }.map(\.element)
+        for task in queued {
+            if task.generation == nil && localRuns() >= capacity { continue }
             if let planID = task.planID, snapshot.plans.first(where: { $0.id == planID })?.paused == true { continue }
             let ready = (task.dependencyIDs ?? []).allSatisfy { dependency in snapshot.tasks.contains { $0.id == dependency && $0.status == .completed } }
-            if ready { start(task.id) }
+            guard ready else { continue }
+            if task.generation != nil { if canStartGeneration(task) { startGeneration(task.id) }; continue }
+            if let employee = employee(task.employeeID), let tool = tool(employee.toolID), task.command == nil, let limit = tool.concurrencyLimit, activeRunCount(toolID: tool.id) >= limit { continue }
+            // A step whose worktree is still being created must not start in the project folder meanwhile.
+            if preparingWorktrees.contains(task.id) { continue }
+            if needsWorktree(task) { prepareWorktree(task.id); continue }
+            // One writer per folder: an Edit step waits while another Edit run works there.
+            if let employee = employee(task.employeeID), let tool = tool(employee.toolID), tool.isCLI,
+               (try? accessLevel(for: task, employee: employee, tool: tool)) == .edit, editLocked(task.workingDirectory) { continue }
+            start(task.id)
         }
     }
     private func start(_ id: UUID) {
         guard let index = snapshot.tasks.firstIndex(where: { $0.id == id }),
-              let employee = employee(snapshot.tasks[index].employeeID), let tool = tool(employee.toolID), tool.isEnabled, employee.enabled ?? true else { return }
+              let employee = employee(snapshot.tasks[index].employeeID), let ownTool = tool(employee.toolID), ownTool.isEnabled, employee.enabled ?? true else { return }
         var task = snapshot.tasks[index]
+        // A command step runs its own CLI (for example ffmpeg) with the plan's arguments, not the owner's CLI.
+        guard let tool = task.command.map({ self.tool($0.toolID) }) ?? ownTool, tool.isEnabled else { return }
         let runID = UUID()
         do {
             if !(task.dependencyIDs ?? []).isEmpty {
@@ -193,17 +249,30 @@ final class WorkbenchStore: ObservableObject {
                 task.input += "\n\n已验收的前序交付：\n" + context.joined(separator: "\n\n")
             }
             let directory = try archive.prepare(runID: runID, projectID: task.projectID)
-            var effectiveTool = tool
-            if task.purpose == .planning || task.purpose == .review { effectiveTool.codexWorkspaceWrite = false }
-            var run = TaskRun(id: runID, task: task, employee: employee, tool: effectiveTool, directory: directory, feedback: task.pendingFeedback ?? "")
-            if effectiveTool.adapterKind == .codex && (task.purpose == .planning || task.purpose == .review) {
-                let schema = try task.purpose == .planning ? CollaborationSchema.plan(employeeIDs: snapshot.employees.filter { $0.enabled ?? true }.map(\.id)) : CollaborationSchema.review()
-                let schemaURL = directory.appendingPathComponent("response-schema.json")
-                try schema.write(to: schemaURL, options: .atomic)
-                run.arguments = ["exec", "--json", "--sandbox", "read-only", "--skip-git-repo-check", "--output-schema", schemaURL.path, "--output-last-message", run.outputDirectory + "/result.json", "--", "职责：\(employee.instructions)\n\n\(run.input)"]
+            var run = TaskRun(id: runID, task: task, employee: employee, tool: tool, directory: directory, feedback: task.pendingFeedback ?? "")
+            var schemaText: String?
+            if let command = task.command {
+                run.arguments = try expandCommand(command, outputDirectory: run.outputDirectory)
+            } else if tool.isCLI {
+                let level = try accessLevel(for: task, employee: employee, tool: tool)
+                var schemaURL: URL?
+                if task.purpose == .planning || task.purpose == .review {
+                    let mediaReview = task.purpose == .review && snapshot.tasks.first { $0.id == task.reviewSourceTaskID }?.generation != nil
+                    let schema = try task.purpose == .planning ? CollaborationSchema.plan(employeeIDs: snapshot.employees.current.filter { $0.enabled ?? true }.map(\.id)) : (mediaReview ? CollaborationSchema.mediaReview() : CollaborationSchema.review())
+                    schemaURL = directory.appendingPathComponent("response-schema.json")
+                    try schema.write(to: schemaURL!, options: .atomic)
+                    schemaText = String(decoding: schema, as: UTF8.self)
+                }
+                let model = employee.model?.trimmingCharacters(in: .whitespacesAndNewlines)
+                run.accessLevel = level; run.model = (model?.isEmpty ?? true) ? nil : model
+                run.sessionID = tool.assignsSessionID ? UUID().uuidString.lowercased() : nil
+                run.arguments = try tool.invocation(CLIInvocation(prompt: run.input, instructions: employee.instructions, outputDirectory: run.outputDirectory, workingDirectory: run.workingDirectory, model: run.model, access: level, schema: schemaText, schemaFile: schemaURL?.path, sessionID: run.sessionID))
             }
+            let requestedStructure = schemaText != nil
+            let liveBuffer = LiveTurnBuffer()
             let log = try RunLog(url: URL(fileURLWithPath: run.logPath))
             log.append("[system] \(tool.adapterKind == .comfyUI ? "提交工作流 " + (tool.remote?.workflowName ?? "") : "启动 " + tool.executable)\n[system] run \(run.id)\n[system] 产物目录 \(run.outputDirectory)\n")
+            if let level = run.accessLevel { log.append("[system] 权限 \(tool.managesAccess ? level.title : "未由工作台管理")\(run.sessionID.map { " · 会话 " + $0 } ?? "")\n") }
             let previous = snapshot
             snapshot.tasks[index].status = .running; snapshot.tasks[index].pendingFeedback = nil
             snapshot.tasks[index].toolSnapshot = tool; snapshot.tasks[index].employeeSnapshot = employee
@@ -217,6 +286,7 @@ final class WorkbenchStore: ObservableObject {
                         try? await Task.sleep(nanoseconds: 150_000_000)
                         guard !Task.isCancelled else { break }
                         self?.appendLog(log.drain(), to: id)
+                        if let live = liveBuffer.take() { self?.liveTurns[id] = live }
                     }
                 }
                 var finalStatus: WorkStatus = .failed, exit: Int32?
@@ -226,8 +296,15 @@ final class WorkbenchStore: ObservableObject {
                         finalStatus = result; exit = result == .review ? 0 : nil
                         log.append("\n[system] 远程执行 \(result.title)\n")
                     } else {
-                        let result = try await runner.run(id: runID, tool: tool, input: run.input, directory: run.workingDirectory, arguments: run.arguments, environment: ["MYWORKBENCH_OUTPUT_DIR": run.outputDirectory, "MYWORKBENCH_RUN_ID": runID.uuidString], onOutput: { log.append($0) })
+                        let collector = CLIOutputCollector(format: tool.format) { liveBuffer.handle($0) }
+                        var environment = await environmentAfterLookup(for: tool)
+                        environment["MYWORKBENCH_OUTPUT_DIR"] = run.outputDirectory; environment["MYWORKBENCH_RUN_ID"] = runID.uuidString
+                        let result = try await runner.run(id: runID, tool: tool, input: run.input, directory: run.workingDirectory, arguments: run.arguments, environment: environment, onOutput: { chunk in
+                            log.append(chunk); if chunk.stream == .stdout { collector.consume(chunk.text) }
+                        })
                         finalStatus = result.status; exit = result.exitCode
+                        let summary = collector.finish()
+                        recordOutput(summary, runID: runID, outputDirectory: run.outputDirectory, format: tool.format, structured: requestedStructure, log: log)
                         log.append("\n[system] 退出码 \(result.exitCode) · \(result.status.title)\n")
                     }
                 } catch {
@@ -245,10 +322,10 @@ final class WorkbenchStore: ObservableObject {
                     do { try refreshArtifacts(runID: runID) } catch { errorMessage = "产物归档失败：\(error.localizedDescription)" }
                 }
                 remoteSessions.removeValue(forKey: runID); remoteCancelled.remove(runID); remoteStopRequested.remove(runID)
-                activeRuns.removeValue(forKey: id)
+                activeRuns.removeValue(forKey: id); liveTurns.removeValue(forKey: id)
                 if save() {
                     if [.failed, .cancelled, .timedOut, .interrupted].contains(finalStatus), let planID = task.planID { pausePlan(planID, paused: true) }
-                    coordinateFinishedTask(id); schedulePending()
+                    coordinateFinishedTask(id); schedulePending(); scheduleTurns()
                 }
             }
         } catch {
@@ -274,20 +351,26 @@ final class WorkbenchStore: ObservableObject {
     }
     func accept(_ id: UUID) {
         guard let i = snapshot.tasks.firstIndex(where: { $0.id == id && $0.status == .review }), let latest = runs(for: id).first else { return }
+        let variantTask = (snapshot.tasks[i].generation?.variants ?? 1) > 1
+        if variantTask && !artifacts(for: latest.id).contains(where: \.accepted) { errorMessage = "请先选用至少一个变体，再验收。只有选用的结果会交给后续步骤。"; return }
         if snapshot.tasks[i].purpose == .planning { errorMessage = "请先审阅并确认协作计划。"; return }
         if latest.remoteArtifacts?.contains(where: { $0.localArtifactID == nil }) == true { errorMessage = "请先下载并检查本次远程产物，再确认验收。"; return }
         if change({ snapshot in
             snapshot.tasks[i].status = .completed
             if let r = snapshot.runs.firstIndex(where: { $0.id == latest.id }) { snapshot.runs[r].status = .completed }
-            for a in snapshot.artifacts.indices where snapshot.artifacts[a].runID == latest.id { snapshot.artifacts[a].accepted = true }
-        }) { coordinatePendingReviews(); schedulePending() }
+            if !variantTask { for a in snapshot.artifacts.indices where snapshot.artifacts[a].runID == latest.id { snapshot.artifacts[a].accepted = true } }
+        }) {
+            coordinatePendingReviews(); schedulePending(); scheduleTurns()
+            if let task = snapshot.tasks.first(where: { $0.id == id }), task.generation != nil || task.command != nil, project(task.projectID)?.autoExport == true { exportOutputs(id) }
+            if let planID = snapshot.tasks[i].planID { requestWrapUpIfDone(planID: planID) }
+        }
     }
     func acceptArtifact(_ id: UUID) {
         guard let index = snapshot.artifacts.firstIndex(where: { $0.id == id }), snapshot.runs.contains(where: { $0.id == snapshot.artifacts[index].runID && $0.status == .completed }) else { return }
         change { $0.artifacts[index].accepted = true }
     }
     @discardableResult func assignDraft(_ taskID: UUID, to employeeID: UUID) -> Bool {
-        guard let index = snapshot.tasks.firstIndex(where: { $0.id == taskID && $0.status == .draft && $0.archivedAt == nil }), (employee(employeeID).map { $0.enabled ?? true } ?? false) else { return false }
+        guard let index = snapshot.tasks.firstIndex(where: { $0.id == taskID && !$0.isDeleted && $0.status == .draft && $0.archivedAt == nil }), (employee(employeeID).map { $0.enabled ?? true } ?? false) else { return false }
         return change { $0.tasks[index].employeeID = employeeID }
     }
     func refreshArtifacts(runID: UUID) throws {
@@ -320,14 +403,14 @@ final class WorkbenchStore: ObservableObject {
 
 
 extension WorkbenchStore {
-    private func remoteClient(_ tool: ToolConfig) throws -> ComfyClient {
+    func remoteClient(_ tool: ToolConfig) throws -> ComfyClient {
         guard let connection = tool.remote else { throw RemoteError.invalidConfiguration }
         let token = connection.requiresAPIKey ? try CredentialVault().read(toolID: tool.id) : nil
         if connection.requiresAPIKey && (token?.isEmpty ?? true) { throw NSError(domain: "MyWorkbench.Remote", code: 1, userInfo: [NSLocalizedDescriptionKey: "服务需要 API 凭证，请在工具配置中保存到钥匙串。"] ) }
         return try ComfyClient(connection: connection, token: token)
     }
     func checkRemote(_ toolID: UUID) {
-        guard let tool = tool(toolID), !probingTools.contains(toolID) else { return }
+        guard let tool = tool(toolID), !tool.isDeleted, !probingTools.contains(toolID) else { return }
         probingTools.insert(toolID)
         Task {
             defer { probingTools.remove(toolID) }
@@ -335,8 +418,9 @@ extension WorkbenchStore {
             catch { remoteChecks[toolID] = "连接失败"; errorMessage = error.localizedDescription }
         }
     }
+    /// Opens the SSH tunnel of a legacy ComfyUI tool or of a server (the ID is either).
     func connectTunnel(_ toolID: UUID) {
-        guard let ssh = tool(toolID)?.remote?.ssh, tunnelIDs[toolID] == nil else { return }
+        guard let ssh = tool(toolID)?.remote?.ssh ?? snapshot.server(toolID)?.ssh, tunnelIDs[toolID] == nil else { return }
         do {
             let args = try ssh.arguments(), id = UUID()
             tunnelIDs[toolID] = id; tunnelTools.insert(toolID)
@@ -353,35 +437,38 @@ extension WorkbenchStore {
             }
         } catch { errorMessage = error.localizedDescription }
     }
+    func remoteSessionsCleanup(_ runID: UUID) { remoteSessions.removeValue(forKey: runID); remoteCancelled.remove(runID); remoteStopRequested.remove(runID) }
     func disconnectTunnel(_ toolID: UUID) { if let id = tunnelIDs[toolID] { tunnelRunner.cancel(id: id) } }
     func stopAllTunnels() { for id in tunnelIDs.values { tunnelRunner.cancel(id: id) } }
 
-    private func executeRemote(run: TaskRun, log: RunLog, submit: Bool) async throws -> WorkStatus {
+    func executeRemote(run: TaskRun, log: RunLog, submit: Bool) async throws -> WorkStatus {
         let client = try remoteClient(run.tool)
-        remoteSessions[run.id] = client
+        // Variant jobs submit under their own ID but are recorded on, and cancelled through, their task's run.
+        let key = remoteAliases[run.id] ?? run.id
+        remoteSessions[key] = client
         var promptID = run.remotePromptID ?? run.id.uuidString.lowercased()
         if submit {
-            if remoteStopRequested.contains(run.id) { return .cancelled }
+            if remoteStopRequested.contains(key) { return .cancelled }
             do {
                 promptID = try await client.submit(input: run.input, promptID: run.id) {
-                    if self.remoteStopRequested.contains(run.id) { throw CancellationError() }
-                    if let i = self.snapshot.runs.firstIndex(where: { $0.id == run.id }) { self.snapshot.runs[i].remotePromptID = promptID }
+                    if self.remoteStopRequested.contains(key) { throw CancellationError() }
+                    if let i = self.snapshot.runs.firstIndex(where: { $0.id == key }) { self.snapshot.runs[i].remotePromptID = promptID; self.snapshot.runs[i].remotePromptIDs = (self.snapshot.runs[i].remotePromptIDs ?? []) + [promptID] }
                     guard self.save() else { throw RemoteError.ambiguousSubmission }
                 }
             } catch is CancellationError { return .cancelled }
-            if let i = snapshot.runs.firstIndex(where: { $0.id == run.id }) { snapshot.runs[i].remotePromptID = promptID }
+            if let i = snapshot.runs.firstIndex(where: { $0.id == key }) { snapshot.runs[i].remotePromptID = promptID }
             guard save() else { throw RemoteError.ambiguousSubmission }
             log.append("[system] 服务端任务编号 \(promptID)\n")
         }
         let deadline = run.startedAt.addingTimeInterval(run.tool.timeout)
         var previous = ""
         while true {
-            if remoteCancelled.contains(run.id) { return .cancelled }
-            if remoteStopRequested.contains(run.id), try await client.cancel(promptID: promptID) { return .cancelled }
+            if remoteCancelled.contains(key) { return .cancelled }
+            if remoteStopRequested.contains(key), try await client.cancel(promptID: promptID) { return .cancelled }
             let state = try await client.state(promptID: promptID)
             switch state {
             case .success(var files):
-                let previousFiles = snapshot.runs.first(where: { $0.id == run.id })?.remoteArtifacts ?? []
+                let previousFiles = snapshot.runs.first(where: { $0.id == key })?.remoteArtifacts ?? []
                 for index in files.indices {
                     files[index].byteCount = try? await client.size(of: files[index])
                     if let existing = previousFiles.first(where: { $0.filename == files[index].filename && $0.subfolder == files[index].subfolder && $0.type == files[index].type }) {
@@ -389,7 +476,7 @@ extension WorkbenchStore {
                         if existing.byteCount == files[index].byteCount { files[index].localArtifactID = existing.localArtifactID }
                     }
                 }
-                if let i = snapshot.runs.firstIndex(where: { $0.id == run.id }) { snapshot.runs[i].remoteArtifacts = files }
+                if let i = snapshot.runs.firstIndex(where: { $0.id == key }) { snapshot.runs[i].remoteArtifacts = files }
                 log.append("[system] 服务端执行成功，返回 \(files.count) 个文件；请下载后验收。\n")
                 return .review
             case .failed(let message): log.append("[system] 服务端执行失败：\(message)\n"); return .failed
@@ -447,9 +534,10 @@ extension WorkbenchStore {
 
 extension WorkbenchStore {
     func generatePlan(goal: String, managerID: UUID, projectID: UUID) -> UUID? {
-        guard let manager = employee(managerID), tool(manager.toolID)?.adapterKind == .codex, let project = snapshot.projects.first(where: { $0.id == projectID }), !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { errorMessage = CollaborationError.invalidPlan.localizedDescription; return nil }
-        let roster = snapshot.employees.filter { $0.enabled ?? true }.map { employee in
-            "id=\(employee.id.uuidString)；姓名=\(employee.name)；职位=\(employee.role)；部门=\(employee.department)；职责=\(employee.instructions)；工具=\(tool(employee.toolID)?.adapterKind.title ?? "不可用")"
+        guard let manager = employee(managerID), canPlanOrReview(manager), let project = snapshot.projects.first(where: { $0.id == projectID }), !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { errorMessage = CollaborationError.invalidPlan.localizedDescription; return nil }
+        guard !project.isArchived else { errorMessage = WorkbenchStore.archivedProjectMessage; return nil }
+        let roster = snapshot.employees.current.filter { $0.enabled ?? true }.map { employee in
+            "id=\(employee.id.uuidString)；姓名=\(employee.name)；职位=\(employee.role)；部门=\(employee.department)；职责=\(employee.instructions)；工具=\(tool(employee.toolID)?.name ?? "不可用")"
         }.joined(separator: "\n")
         let prompt = "把以下项目目标拆解为1至20个可验收步骤。只规划，不执行、不调用工具或访问文件。仅使用员工表中的 employeeID。为步骤给出独立字符串 id、title、input、acceptance、dependencies。依赖必须来自本计划且不能形成环。产物交接通过依赖完成后自动提供，不混用其他项目。所有文本使用中文。返回符合 JSON Schema 的计划。\n\n项目：\(project.name)\n项目目标：\(project.goal)\n本次目标：\(goal)\n\n可用员工：\n\(roster)"
         var task = WorkTask(title: "拆解：" + String(goal.prefix(28)), employeeID: managerID, input: prompt, workingDirectory: project.directory, acceptance: "步骤、员工与依赖均可执行，人工确认后再启动")
@@ -464,12 +552,12 @@ extension WorkbenchStore {
         let draft = try JSONDecoder().decode(PlanDraft.self, from: structuredData(for: taskID))
         try draft.validate(workspace: snapshot); return draft
     }
-    @discardableResult func approvePlan(_ draft: PlanDraft, planningTaskID: UUID?, projectID: UUID, reviewerID: UUID?, maximumReworks: Int = 1) -> UUID? {
+    @discardableResult func approvePlan(_ draft: PlanDraft, planningTaskID: UUID?, projectID: UUID, reviewerID: UUID?, maximumReworks: Int = 1, useWorktrees: Bool = false) -> UUID? {
         do {
             try draft.validate(workspace: snapshot)
-            guard let project = snapshot.projects.first(where: { $0.id == projectID }) else { throw CollaborationError.invalidPlan }
+            guard let project = snapshot.projects.first(where: { $0.id == projectID }), !project.isArchived else { throw CollaborationError.invalidPlan }
             if let reviewerID {
-                guard !draft.steps.contains(where: { $0.employeeID == reviewerID }), let reviewer = employee(reviewerID), reviewer.enabled ?? true, let tool = tool(reviewer.toolID), tool.isEnabled, tool.adapterKind != .comfyUI else { throw CollaborationError.invalidReviewer }
+                guard !draft.steps.contains(where: { $0.employeeID == reviewerID }), let reviewer = employee(reviewerID), canPlanOrReview(reviewer) else { throw CollaborationError.invalidReviewer }
             }
             if let planningTaskID {
                 guard snapshot.tasks.contains(where: { $0.id == planningTaskID && $0.purpose == .planning && $0.status == .review && $0.projectID == projectID }) else { throw CollaborationError.invalidPlan }
@@ -478,9 +566,11 @@ extension WorkbenchStore {
             let tasks = draft.steps.map { step -> WorkTask in
                 var task = WorkTask(id: mapping[step.id]!, title: step.title, employeeID: step.employeeID, input: step.input, workingDirectory: project.directory, acceptance: step.acceptance)
                 task.projectID = projectID; task.planID = planID; task.dependencyIDs = step.dependencies.map { mapping[$0]! }; task.status = .queued
+                task.accessLevel = step.access
                 return task
             }
-            let plan = CollaborationPlan(id: planID, projectID: projectID, title: draft.title, goal: draft.goal, taskIDs: tasks.map(\.id), reviewerID: reviewerID, maximumReworks: maximumReworks)
+            var plan = CollaborationPlan(id: planID, projectID: projectID, title: draft.title, goal: draft.goal, taskIDs: tasks.map(\.id), reviewerID: reviewerID, maximumReworks: maximumReworks)
+            plan.useWorktrees = useWorktrees ? true : nil
             guard change({ snapshot in
                 snapshot.plans.append(plan); snapshot.tasks.insert(contentsOf: tasks, at: 0)
                 if let planningTaskID, let index = snapshot.tasks.firstIndex(where: { $0.id == planningTaskID }) {
@@ -495,7 +585,7 @@ extension WorkbenchStore {
         } catch { errorMessage = error.localizedDescription; return nil }
     }
     func pausePlan(_ planID: UUID, paused: Bool) {
-        guard let p = snapshot.plans.firstIndex(where: { $0.id == planID }) else { return }
+        guard let p = snapshot.plans.firstIndex(where: { $0.id == planID && !$0.isDeleted }) else { return }
         if change({ snapshot in
             snapshot.plans[p].paused = paused
             if !paused {
@@ -508,10 +598,14 @@ extension WorkbenchStore {
         for task in snapshot.tasks where task.planID == planID && [.running, .queued].contains(task.status) { cancel(task.id) }
     }
     private func coordinatePendingReviews() {
-        for task in snapshot.tasks where task.status == .review && task.purpose != .review && task.purpose != .planning { coordinateFinishedTask(task.id) }
+        for task in snapshot.tasks.current where task.status == .review && task.purpose != .review && task.purpose != .planning { coordinateFinishedTask(task.id) }
     }
-    private func coordinateFinishedTask(_ taskID: UUID) {
+    func coordinateFinishedTask(_ taskID: UUID) {
         guard let task = snapshot.tasks.first(where: { $0.id == taskID && $0.status == .review }), let latest = runs(for: taskID).first else { return }
+        if let spec = task.generation, spec.variants == 1, let planID = task.planID, let plan = snapshot.plans.first(where: { $0.id == planID && !$0.paused }), plan.directorReview == true,
+           latest.remoteArtifacts?.contains(where: { $0.localArtifactID == nil }) != true, !snapshot.tasks.contains(where: { $0.reviewSourceRunID == latest.id }) {
+            enqueueMediaReview(task: task, run: latest, plan: plan); return
+        }
         if task.purpose == .planning {
             do { _ = try planDraft(for: taskID) }
             catch { markStructuredFailure(taskID, latest.id, error) }
@@ -571,7 +665,10 @@ extension WorkbenchStore {
             switch decision.decision {
             case .pass: accept(sourceTaskID)
             case .rework:
-                if runs(for: sourceTaskID).count - 1 < plan.maximumReworks && !plan.paused { self.run(sourceTaskID, feedback: decision.notes) }
+                if runs(for: sourceTaskID).count - 1 < plan.maximumReworks && !plan.paused {
+                    applyReworkParameters(sourceTaskID, decision.parameters ?? [])
+                    self.run(sourceTaskID, feedback: decision.notes)
+                }
                 else { pausePlan(planID, paused: true) }
             case .blocked: pausePlan(planID, paused: true)
             }

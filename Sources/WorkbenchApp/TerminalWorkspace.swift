@@ -16,7 +16,7 @@ import Darwin
     @Published var exitCode: Int32?
     var onEnd: (() -> Void)?
 
-    init(employee: Employee?, tool: ToolConfig?, directory: String, login: Bool) throws {
+    init(employee: Employee?, tool: ToolConfig?, directory: String, login: Bool, extraEnvironment: [String: String] = [:], command: [String]? = nil) throws {
         employeeID = employee?.id; toolID = tool?.id; name = employee?.name ?? "本机"; toolName = tool?.name ?? "zsh"; self.directory = directory; isLogin = login
         var isDirectory: ObjCBool = false
         guard directory.hasPrefix("/"), !directory.contains("\0"), FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory), isDirectory.boolValue else { throw WorkbenchError.invalidDirectory }
@@ -27,9 +27,12 @@ import Darwin
         terminal.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         configureAppearance(dark: false)
         var environment = ProcessInfo.processInfo.environment
+        for (key, value) in extraEnvironment { environment[key] = value }
         environment["TERM"] = "xterm-256color"; environment["LANG"] = "en_US.UTF-8"
-        let executable = login ? tool!.executable : "/bin/zsh"
-        let arguments = login ? tool!.authenticationLoginArguments! : ["-l"]
+        // A login, or an interactive resume of a chat session, runs the CLI itself; otherwise a login shell.
+        let direct = login || (command != nil && tool != nil)
+        let executable = direct ? tool!.executable : "/bin/zsh"
+        let arguments = login ? tool!.authenticationLoginArguments! : (direct ? command! : ["-l"])
         guard !executable.contains("\0"), !arguments.contains(where: { $0.contains("\0") }) else { throw WorkbenchError.invalidArguments }
         terminal.startProcess(executable: executable, args: arguments, environment: environment.map { "\($0.key)=\($0.value)" }, currentDirectory: directory)
         if !terminal.process.running { ended = true }
@@ -88,12 +91,12 @@ struct TerminalBookmark: Identifiable, Codable {
     }
     var selected: TerminalSession? { sessions.first { $0.id == selectedID } }
     var activeCount: Int { sessions.filter { !$0.ended }.count }
-    func open(employee: Employee?, tool: ToolConfig?, directory: String, login: Bool = false, onLoginEnd: (() -> Void)? = nil) {
-        if !login, let existing = sessions.first(where: { !$0.ended && $0.employeeID == employee?.id && $0.toolID == tool?.id && $0.directory == directory }) {
+    func open(employee: Employee?, tool: ToolConfig?, directory: String, login: Bool = false, environment: [String: String] = [:], command: [String]? = nil, onLoginEnd: (() -> Void)? = nil) {
+        if !login, command == nil, let existing = sessions.first(where: { !$0.ended && $0.employeeID == employee?.id && $0.toolID == tool?.id && $0.directory == directory }) {
             selectedID = existing.id; isVisible = true; showsLog = false; return
         }
         do {
-            let session = try TerminalSession(employee: employee, tool: tool, directory: directory, login: login)
+            let session = try TerminalSession(employee: employee, tool: tool, directory: directory, login: login, extraEnvironment: environment, command: command)
             session.onEnd = { [weak self] in self?.objectWillChange.send(); onLoginEnd?() }
             sessions.append(session); selectedID = session.id; showsLog = false; isVisible = true
             recent.removeAll { $0.employeeID == employee?.id && $0.toolID == tool?.id && $0.directory == directory }

@@ -5,34 +5,71 @@ import ImageIO
 struct ArtifactList: View {
     @ObservedObject var store: WorkbenchStore
     var runID: UUID?
+    /// Cross-project lists pass a filter and show which project each file belongs to.
+    var filter: ((WorkArtifact) -> Bool)? = nil
     @State private var preview: UUID?
+    @State private var renaming: WorkArtifact?
+    @State private var newName = ""
+    @State private var compare: [UUID] = []
+    @State private var showCompare = false
     private var items: [WorkArtifact] {
-        store.snapshot.artifacts.filter { artifact in
+        store.snapshot.artifacts.current.filter { artifact in
             if let runID { return artifact.runID == runID }
+            if let filter { return filter(artifact) }
             return artifact.projectID == store.activeProjectID
         }
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
             if items.isEmpty { Text("尚无归档产物。执行后自动收集产物目录中的文件，也可主动导入。").font(.system(size: 11)).foregroundStyle(.secondary) }
+            if compare.count == 2 { Button("对比所选的两张图片") { showCompare = true }.buttonStyle(StudioPrimaryButtonStyle()) }
             ForEach(items) { artifact in
                 VStack(alignment: .leading, spacing: 8) {
-                    Label(URL(fileURLWithPath: artifact.relativePath).lastPathComponent, systemImage: "doc").font(.system(size: 12, weight: .medium))
-                    Text("\(ByteCountFormatter.string(fromByteCount: artifact.byteCount, countStyle: .file)) · \(artifact.fileType.uppercased()) · \(artifact.accepted ? "已验收" : "待检查")").font(.system(size: 10)).foregroundStyle(.secondary)
+                    Label(artifact.name, systemImage: "doc").font(.system(size: 12, weight: .medium))
+                    Text(([filter == nil ? nil : store.project(artifact.projectID)?.name ?? "未归属项目", ByteCountFormatter.string(fromByteCount: artifact.byteCount, countStyle: .file), artifact.fileType.uppercased(), artifact.accepted ? "已验收" : "待检查"] as [String?]).compactMap { $0 }.joined(separator: " · ")).font(.system(size: 10)).foregroundStyle(.secondary)
+                    if let lineage = lineage(artifact) { Text(lineage).font(.system(size: 10)).foregroundStyle(.secondary).textSelection(.enabled) }
                     HStack {
                         Button("预览") { preview = preview == artifact.id ? nil : artifact.id }.buttonStyle(.link)
+                        if MediaKind.of(fileExtension: artifact.fileType) == .image {
+                            Button(compare.contains(artifact.id) ? "取消对比" : "加入对比") {
+                                if let index = compare.firstIndex(of: artifact.id) { compare.remove(at: index) } else { compare = Array((compare + [artifact.id]).suffix(2)) }
+                            }.buttonStyle(.link)
+                        }
                         Button("Finder") { perform { NSWorkspace.shared.activateFileViewerSelecting([try store.archive.url(for: artifact)]) } }.buttonStyle(.link)
+                        Button("重命名") { newName = artifact.name; renaming = artifact }.buttonStyle(.link)
+                        Button("删除", role: .destructive) { store.pendingDeletion = DeletionTarget(.artifact, artifact.id) }.buttonStyle(.link)
                         if !artifact.accepted, store.snapshot.runs.first(where: { $0.id == artifact.runID })?.status == .completed {
                             Button("已检查") { store.acceptArtifact(artifact.id) }.buttonStyle(.link)
+                        }
+                        if let task = store.snapshot.tasks.first(where: { $0.id == artifact.taskID }), task.status == .review, (task.generation?.variants ?? 1) > 1 {
+                            Button(artifact.accepted ? "取消选用" : "选用此变体") { store.selectVariant(artifact.id, selected: !artifact.accepted) }.buttonStyle(.link)
                         }
                     }.font(.system(size: 10))
                     if preview == artifact.id { ArtifactPreview(artifact: artifact, archive: store.archive) }
                     Divider()
                 }
             }
+        }.alert("重命名产物", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("名称", text: $newName)
+            Button("取消", role: .cancel) { renaming = nil }
+            Button("保存") { if let id = renaming?.id { store.renameArtifact(id, to: newName) }; renaming = nil }
+        } message: { Text("只修改显示名称，归档中的文件路径与来源记录保留。") }
+        .sheet(isPresented: $showCompare) {
+            let urls = compare.compactMap { id in store.snapshot.artifacts.current.first { $0.id == id }.flatMap { try? store.archive.url(for: $0) } }
+            if urls.count == 2 { ImageCompareSheet(left: urls[0], right: urls[1]) }
         }
     }
     private func perform(_ body: () throws -> Void) { do { try body() } catch { store.errorMessage = error.localizedDescription } }
+    /// MD-12: where a generated file came from.
+    private func lineage(_ artifact: WorkArtifact) -> String? {
+        guard let run = store.snapshot.runs.first(where: { $0.id == artifact.runID }), let spec = run.generation else { return nil }
+        let template = store.snapshot.template(spec.templateID), server = store.snapshot.server(spec.serverID)
+        var parts = ["模板 \(template?.name ?? "已删除") (\(spec.versionHash))", "服务器 \(server?.name ?? "已删除")"]
+        if case .number(let seed) = spec.submittedValues?["seed"] { parts.append("种子 \(Int64(seed))") }
+        if let prompt = run.remotePromptID { parts.append("编号 " + prompt.prefix(8)) }
+        if let task = store.snapshot.tasks.first(where: { $0.id == run.taskID }), task.planID != nil { parts.append("计划步骤「\(task.title)」") }
+        return parts.joined(separator: " · ")
+    }
 }
 
 private struct ArtifactPreview: View {
@@ -41,8 +78,8 @@ private struct ArtifactPreview: View {
     private var url: URL? { try? archive.url(for: artifact) }
     var body: some View {
         if let url {
-            if ["png", "jpg", "jpeg", "webp", "heic", "gif"].contains(artifact.fileType), let image = thumbnail(url) {
-                Image(nsImage: image).resizable().scaledToFit().frame(maxHeight: 180).clipShape(RoundedRectangle(cornerRadius: 8))
+            if MediaKind.of(fileExtension: artifact.fileType) != .other {
+                MediaPreview(url: url)
             } else if ["txt", "md", "json", "csv", "swift", "py", "html", "log"].contains(artifact.fileType) {
                 ReadOnlyTextView(text: readText(url), pointSize: 10, accessibilityName: "产物文本预览").frame(height: 150)
             } else {
@@ -60,36 +97,6 @@ private struct ArtifactPreview: View {
         defer { try? handle.close() }
         let bytes = (try? handle.read(upToCount: 100000)) ?? Data()
         return String(decoding: bytes, as: UTF8.self) + (artifact.byteCount > 100000 ? "\n…预览显示前100KB" : "")
-    }
-}
-
-struct ProjectConfigurationSheet: View {
-    @ObservedObject var store: WorkbenchStore
-    @Environment(\.dismiss) private var dismiss
-    @State private var name = ""
-    @State private var directory = ""
-    @State private var goal = ""
-    private var valid: Bool {
-        var isDirectory: ObjCBool = false
-        return !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && directory.hasPrefix("/") && FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory) && isDirectory.boolValue && store.storageAvailable
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("把一个项目放上桌").font(.system(size: 24, weight: .medium))
-            Text("任务、执行记录与产物分别归属于各自的项目。").font(.system(size: 12)).foregroundStyle(.secondary)
-            Form {
-                TextField("项目名称", text: $name)
-                HStack {
-                    TextField("工作目录", text: $directory)
-                    Button("选择目录") {
-                        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false
-                        if panel.runModal() == .OK, let url = panel.url { directory = url.path }
-                    }
-                }
-                TextField("项目目标", text: $goal, axis: .vertical).lineLimit(3...6)
-            }.formStyle(.grouped)
-            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button("放上项目桌") { if store.addProject(WorkProject(name: name, directory: directory, goal: goal)) { dismiss() } }.buttonStyle(.borderedProminent).disabled(!valid) }
-        }.padding(30).frame(width: 560, height: 380)
     }
 }
 
@@ -112,7 +119,7 @@ struct HandoffConfigurationSheet: View {
             Text("来源：\(task.title) · \(run.employee.name)\nrun \(run.id)").font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled)
             Form {
                 Picker("接收员工", selection: $target) {
-                    ForEach(store.snapshot.employees.filter { $0.enabled ?? true }) { Text("\($0.name) · \($0.role)").tag(Optional($0.id)) }
+                    ForEach(store.snapshot.employees.current.filter { $0.enabled ?? true }) { Text("\($0.name) · \($0.role)").tag(Optional($0.id)) }
                 }
                 TextField("下游任务目标", text: $goal, axis: .vertical).lineLimit(2...3)
                 Section("交接文件 · 只列出此执行已验收的产物") {
@@ -129,7 +136,7 @@ struct HandoffConfigurationSheet: View {
             Text("确认后创建下游草稿，执行由你发起。").font(.system(size: 11)).foregroundStyle(.secondary)
             HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button("确认交接") { confirm() }.buttonStyle(.borderedProminent).disabled(target == nil || goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || acceptance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
         }.padding(30).frame(width: 610, height: 680)
-        .onAppear { target = store.snapshot.employees.first(where: { $0.id != task.employeeID && ($0.enabled ?? true) })?.id ?? task.employeeID; selectedArtifacts = Set(store.artifacts(for: run.id).filter(\.accepted).map(\.id)); checks = task.acceptance }
+        .onAppear { target = store.snapshot.employees.current.first(where: { $0.id != task.employeeID && ($0.enabled ?? true) })?.id ?? task.employeeID; selectedArtifacts = Set(store.artifacts(for: run.id).filter(\.accepted).map(\.id)); checks = task.acceptance }
     }
     private func confirm() {
         guard let target else { return }

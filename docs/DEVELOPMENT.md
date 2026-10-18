@@ -105,3 +105,20 @@ WorkArea保存工作区，Employee.workspaceID以稳定编号关联；迁移不�
 TerminalWorkspace独立管理按需会话、关闭面板、结束和元信息，TerminalSession使用SwiftTerm的AppKit终端与本地PTY；任务调度仍由ProcessRunner管理。SwiftTerm固定1.10.0，Xcode与SwiftPM均保存解析结果，兼容当前环境，无需Metal工具链。原生渲染脚本链接Debug构建的SwiftTerm.o，需先执行build.sh。
 
 登录结果仅存内存，修改路径、适配器或检测argv会使旧结果失效。Codex明确的未登录诊断与其他失败分开处理；通用CLI按配置的状态argv和退出码检测。终端历史只保存元信息，不保存命令和输出，也不自动启动旧进程。
+
+## v0.6 M5 (English)
+
+- `WorkbenchCore/CLIDefinition.swift`: CLI definitions written by the user (`ToolConfig` fields for resume template, output format, access-level and model fragments, structured output, logged-out text, login-shell PATH). `invocation(_:)` builds argv in one pass with no shell; `{flags}` places the fragments. `migratingLegacyAdapter()` turns the retired Codex adapter into an ordinary definition.
+- `WorkbenchCore/CLIOutput.swift`: `CLIOutputCollector` reads plain text, Claude Code stream-json or Codex JSONL from stdout and returns the reply, session ID, usage, tool activity and structured output.
+- `WorkbenchCore/LoginShell.swift`: resolves a command name and the user's PATH through their login shell, passing the name as a positional argument.
+- `WorkbenchCore/ProjectCategories.swift`: categories, project filters, inferred modules and the v3→v4 migration (`workspace.pre-v06.sqlite` backup).
+- App: `CLIConfigurationSheet`, `ToolShelfView`, `ProjectsViews` (All Projects, category manager, project form) and `WorkbenchStore+CLI` / `WorkbenchStore+Projects`.
+- Verification: `zsh scripts/verify_m5.sh` runs under Finder's minimal environment with a fake CLI and an isolated database, and renders the new screens to `work/m5-qa/snapshots`.
+
+## v0.6 M6–M9 (English)
+
+- Chat (M6): `WorkbenchCore/Chat.swift` holds conversations, turns, CLI sessions and failure messages. `WorkbenchStore+Chat.swift` queues turns (one per agent per conversation, at most 4 at once), streams output through `LiveTurnBuffer`, resumes sessions with the CLI's resume template, and enforces one Edit run per folder (`editLocked`). Views: `ChatViews.swift`.
+- Teams (M7): a team message starts a planning turn for the lead; the plan is validated against the selected agents, repaired once if invalid, approved through `PlanApprovalSheet`, and run by the existing task scheduler. The lead posts a wrap-up when every step is accepted.
+- Media (M8): `WorkbenchCore/Media.swift` (servers, templates, parameters, generation specs), `Production.swift` (director plans), `ComfyClient.health()` and `upload()`. `WorkbenchStore+Media.swift` runs generation jobs (upload → resolve → submit → download), checks budgets and job limits, and prepares director reviews in an evidence folder (images copied, video keyframes extracted with AVFoundation, audio metadata only). Views: `MediaViews.swift`, `ProductionViews.swift`.
+- P1 items (M9): `WorkbenchCore/Git.swift` (status, diff, worktrees, merge; `CLIDefinitionFile` export format) and `WorkbenchStore+P1.swift`.
+- Fixtures for verification live in `scripts/fixtures/`: `claude_like.py` and `codex_like.py` speak each CLI's output format, `comfy_media.py` imitates a ComfyUI server, `ffmpeg_like.py` stands in for a command tool. Run `zsh scripts/verify_m5.sh`, `verify_m6m7.sh`, `verify_m8.sh` and `verify_m9.sh`; each runs under Finder's minimal environment against an isolated database.

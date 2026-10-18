@@ -5,7 +5,7 @@ private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self
 
 struct SQLiteWorkspace {
     let url: URL
-    private func database<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
+    private func database<T>(_ body: (OpaquePointer, Int32) throws -> T) throws -> T {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         var db: OpaquePointer?
         let code = sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil)
@@ -18,18 +18,20 @@ struct SQLiteWorkspace {
         let version = sqlite3_column_int(versionStatement, 0)
         sqlite3_finalize(versionStatement)
         guard versionCode == SQLITE_ROW else { throw error(db, versionCode) }
-        guard version == 0 || version == 2 || version == 3 else { throw WorkbenchError.unsupportedSchema }
-        if version == 2 { try backupBeforeMigration(db) }
+        guard [0, 2, 3, 4].contains(version) else { throw WorkbenchError.unsupportedSchema }
+        if version == 2 { try backupBeforeMigration(db, suffix: "pre-v04") }
+        if version == 3 { try backupBeforeMigration(db, suffix: "pre-v06") }
         try execute(db, "PRAGMA journal_mode=WAL")
         try execute(db, "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value INTEGER NOT NULL)")
         for table in tables {
             try execute(db, "CREATE TABLE IF NOT EXISTS \(table) (id TEXT PRIMARY KEY, payload BLOB NOT NULL)")
         }
-        return try body(db)
+        return try body(db, version)
     }
-    private var tables: [String] { ["tools", "employees", "tasks", "projects", "runs", "artifacts", "handoffs", "plans", "reviews", "workspaces"] }
-    private func backupBeforeMigration(_ db: OpaquePointer) throws {
-        let backupURL = url.deletingPathExtension().appendingPathExtension("pre-v04.sqlite")
+    private var tables: [String] { ["tools", "employees", "tasks", "projects", "runs", "artifacts", "handoffs", "plans", "reviews", "workspaces", "categories", "conversations", "messages", "sessions", "servers", "templates"] }
+    /// Copies the database as it was before a schema upgrade. An existing backup is never replaced.
+    private func backupBeforeMigration(_ db: OpaquePointer, suffix: String) throws {
+        let backupURL = url.deletingPathExtension().appendingPathExtension(suffix + ".sqlite")
         guard !FileManager.default.fileExists(atPath: backupURL.path) else { return }
         var target: OpaquePointer?
         let code = sqlite3_open(backupURL.path, &target)
@@ -45,41 +47,54 @@ struct SQLiteWorkspace {
         try execute(target, "PRAGMA journal_mode=DELETE")
     }
     func load() throws -> WorkspaceSnapshot {
-        try database { db in
+        try database { db, version in
             var snapshot = WorkspaceSnapshot()
+            if version == 2 || version == 3 { snapshot.schemaVersion = Int(version) }
             snapshot.tools = try rows(db, "tools"); snapshot.employees = try rows(db, "employees")
             snapshot.tasks = try rows(db, "tasks"); snapshot.projects = try rows(db, "projects")
             snapshot.runs = try rows(db, "runs"); snapshot.artifacts = try rows(db, "artifacts")
             snapshot.handoffs = try rows(db, "handoffs"); snapshot.plans = try rows(db, "plans"); snapshot.reviews = try rows(db, "reviews")
             let areas: [WorkArea] = try rows(db, "workspaces")
             if !areas.isEmpty { snapshot.workspaces = areas }
+            snapshot.categories = try rows(db, "categories")
+            snapshot.conversations = try rows(db, "conversations"); snapshot.messages = try rows(db, "messages"); snapshot.sessions = try rows(db, "sessions")
+            snapshot.servers = try rows(db, "servers"); snapshot.templates = try rows(db, "templates")
+            let mediaCount = snapshot.servers.count + snapshot.templates.count
+            snapshot.migrateLegacyComfyTools()
+            let mediaMigrated = snapshot.servers.count + snapshot.templates.count != mediaCount
             snapshot.migrateWorkspaces()
+            snapshot.migrateToV4()
             try execute(db, "BEGIN IMMEDIATE")
             do {
                 try replace(db, "workspaces", snapshot.workspaces); try replace(db, "employees", snapshot.employees)
-                try execute(db, "PRAGMA user_version=3"); try execute(db, "COMMIT")
+                if version == 2 || version == 3 { try replace(db, "tools", snapshot.tools); try replace(db, "projects", snapshot.projects) }
+                if mediaMigrated { try replace(db, "servers", snapshot.servers); try replace(db, "templates", snapshot.templates) }
+                try execute(db, "PRAGMA user_version=4"); try execute(db, "COMMIT")
             } catch { try? execute(db, "ROLLBACK"); throw error }
             snapshot.recoverInterruptedTasks()
             return snapshot
         }
     }
     func isInitialized() throws -> Bool {
-        try database { db in
+        try database { db, _ in
             var statement: OpaquePointer?; try prepare(db, "SELECT value FROM metadata WHERE key='initialized'", &statement)
             defer { sqlite3_finalize(statement) }
             return sqlite3_step(statement) == SQLITE_ROW
         }
     }
     func save(_ snapshot: WorkspaceSnapshot) throws {
-        guard snapshot.schemaVersion == 3 else { throw WorkbenchError.unsupportedSchema }
-        try database { db in
+        guard snapshot.schemaVersion == WorkspaceSnapshot.currentSchemaVersion else { throw WorkbenchError.unsupportedSchema }
+        try database { db, _ in
             try execute(db, "BEGIN IMMEDIATE")
             do {
                 try replace(db, "tools", snapshot.tools); try replace(db, "employees", snapshot.employees)
                 try replace(db, "tasks", snapshot.tasks); try replace(db, "projects", snapshot.projects)
                 try replace(db, "runs", snapshot.runs); try replace(db, "artifacts", snapshot.artifacts)
                 try replace(db, "handoffs", snapshot.handoffs); try replace(db, "plans", snapshot.plans); try replace(db, "reviews", snapshot.reviews)
-                try replace(db, "workspaces", snapshot.workspaces); try execute(db, "PRAGMA user_version=3")
+                try replace(db, "workspaces", snapshot.workspaces); try replace(db, "categories", snapshot.categories)
+                try replace(db, "conversations", snapshot.conversations); try replace(db, "messages", snapshot.messages); try replace(db, "sessions", snapshot.sessions)
+                try replace(db, "servers", snapshot.servers); try replace(db, "templates", snapshot.templates)
+                try execute(db, "PRAGMA user_version=4")
                 try execute(db, "INSERT OR REPLACE INTO metadata (key,value) VALUES ('initialized',1)")
                 try execute(db, "COMMIT")
             } catch { try? execute(db, "ROLLBACK"); throw error }

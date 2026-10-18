@@ -8,7 +8,7 @@ enum StudioPage: String, CaseIterable, Identifiable {
         switch self {
         case .home: "我的工作室"
         case .employees: "AI 员工"
-        case .projects: "项目任务"
+        case .projects: "项目"
         case .tools: "工具连接"
         case .assets: "素材库"
         case .knowledge: "知识库"
@@ -32,7 +32,7 @@ enum StudioPage: String, CaseIterable, Identifiable {
         switch self {
         case .home: "让每个想法，都有下一步。"
         case .employees: "找到合适的伙伴，一起把想法变成作品。"
-        case .projects: "从一个想法，到一份可以交付的成果。"
+        case .projects: "按分类整理所有项目，进入项目查看任务与产物。"
         case .tools: "连接你熟悉的 CLI 与制作服务。"
         case .assets: "每一份产物，都有可追溯的工作记录。"
         case .knowledge: "把员工职责、任务标准与验收经验留在工作室。"
@@ -42,16 +42,69 @@ enum StudioPage: String, CaseIterable, Identifiable {
     }
 }
 
+/// Search box shared by the list pages: a quiet pill with a magnifier, readable in both themes.
+struct StudioSearchField: View {
+    var prompt: String
+    @Binding var text: String
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.secondaryText)
+            TextField(prompt, text: $text).textFieldStyle(.plain).font(.system(size: 12))
+            if !text.isEmpty {
+                Button { text = "" } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 11)).foregroundStyle(Theme.secondaryText) }
+                    .buttonStyle(.plain).help("清除搜索")
+            }
+        }
+        .padding(.horizontal, 11).frame(height: 30)
+        .background(Theme.input, in: Capsule())
+        .overlay(Capsule().stroke(Theme.border))
+    }
+}
+
 enum StudioArtwork {
     static func index(for area: WorkArea) -> Int? { WorkArea.defaults.firstIndex { $0.id == area.id } }
     static func name(for area: WorkArea) -> String? {
         index(for: area).map { ["StudioVideo", "StudioAudio", "StudioCode", "StudioDesign"][$0] }
     }
+    /// Module color. Default modules get a brighter variant in dark mode, matching the dark reference buttons.
     static func tint(for area: WorkArea) -> Color {
         if let index = index(for: area), area.color == WorkArea.defaults[index].color {
-            return Color(hex: ["F76C2D", "6840E8", "2384FA", "3C8066"][index])
+            return Theme.adaptive(["F76C2D", "6840E8", "2384FA", "3C8066"][index], ["F37A3A", "7D67EC", "3E8FF5", "3E9A7F"][index])
         }
         return Color(hex: area.color)
+    }
+    /// Dark-mode artwork is a separate asset ("StudioVideoDark" …). Until it exists the app draws a stand-in.
+    static func darkName(for area: WorkArea) -> String? { name(for: area).map { $0 + "Dark" } }
+    static func hasImage(_ name: String) -> Bool { NSImage(named: name) != nil }
+    @MainActor private static var topColors: [String: Color] = [:]
+    /// Average color of the artwork's top strip, so the space above a bottom-aligned picture blends into it.
+    @MainActor static func topColor(of name: String, _ image: NSImage) -> Color {
+        if let cached = topColors[name] { return cached }
+        var color = Theme.paper
+        if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+           let strip = cgImage.cropping(to: CGRect(x: 0, y: 0, width: cgImage.width, height: max(1, cgImage.height / 20))) {
+            let columns = 24, rows = 2
+            var pixels = [UInt8](repeating: 0, count: columns * rows * 4)
+            let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+                guard let context = CGContext(data: buffer.baseAddress, width: columns, height: rows, bitsPerComponent: 8, bytesPerRow: columns * 4,
+                                              space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+                context.interpolationQuality = .high
+                context.draw(strip, in: CGRect(x: 0, y: 0, width: columns, height: rows))
+                return true
+            }
+            if drawn {
+                var sum = [0.0, 0.0, 0.0]
+                for index in stride(from: 0, to: pixels.count, by: 4) { for channel in 0..<3 { sum[channel] += Double(pixels[index + channel]) } }
+                let count = Double(columns * rows) * 255
+                color = Color(.sRGB, red: sum[0] / count, green: sum[1] / count, blue: sum[2] / count)
+            }
+        }
+        topColors[name] = color
+        return color
+    }
+    static func accent(for area: WorkArea) -> Color {
+        let base = NSColor(tint(for: area))
+        return Theme.adaptive(base, base.blended(withFraction: 0.38, of: .white) ?? base)
     }
     static func taskTitle(for area: WorkArea) -> String {
         guard let index = index(for: area), area.name == WorkArea.defaults[index].name else { return "新建任务" }
@@ -63,6 +116,7 @@ enum StudioArtwork {
 }
 
 struct StudioSidebar: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var page: StudioPage
     var reviewCount: Int
     var onNavigate: () -> Void
@@ -76,7 +130,7 @@ struct StudioSidebar: View {
                     Image(nsImage: icon).resizable().scaledToFit().frame(width: 38, height: 38)
                 }
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("workbench").font(.system(size: 18, weight: .bold))
+                    Text("Workbench").font(.system(size: 18, weight: .bold))
                     Text("A PERSONAL AI STUDIO").font(.system(size: 6.2, weight: .medium)).tracking(1.25).foregroundStyle(.secondary)
                 }
             }.padding(.horizontal, 17).padding(.top, 44).padding(.bottom, 32)
@@ -89,8 +143,9 @@ struct StudioSidebar: View {
                             Spacer(minLength: 0)
                             if item == .projects && reviewCount > 0 { Text("\(reviewCount)").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.blue) }
                         }.padding(.horizontal, 13).frame(height: 43).contentShape(RoundedRectangle(cornerRadius: 13))
-                            .background(page == item ? Theme.surface.opacity(0.75) : .clear, in: RoundedRectangle(cornerRadius: 13))
-                            .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(page == item ? .white.opacity(0.95) : .clear, lineWidth: 2))
+                            .foregroundStyle(colorScheme == .dark ? (page == item ? Theme.primaryText : Color(hex: "C9D2DC")) : .primary)
+                            .background(page == item ? (colorScheme == .dark ? Theme.raised.opacity(0.9) : Theme.surface.opacity(0.75)) : .clear, in: RoundedRectangle(cornerRadius: 13))
+                            .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(page == item ? (colorScheme == .dark ? Color(hex: "6B7686") : .white.opacity(0.95)) : .clear, lineWidth: colorScheme == .dark ? 1.2 : 2))
                     }.buttonStyle(.plain).accessibilityIdentifier("studio.nav." + item.rawValue)
                         .accessibilityAddTraits(page == item ? [.isSelected] : [])
                 }
@@ -104,38 +159,65 @@ struct StudioSidebar: View {
             }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary).padding(26)
             HStack(spacing: 6) { Circle().fill(Theme.blue).frame(width: 5, height: 5); Text("本地工作室 · 数据保存在本机") }.font(.system(size: 8)).foregroundStyle(.secondary).padding(.horizontal, 20).padding(.bottom, 24)
         }.frame(width: 198).background(Theme.sidebar)
-            .overlay(alignment: .trailing) { Rectangle().fill(.white.opacity(0.5)).frame(width: 1) }
+            .overlay(alignment: .trailing) { Rectangle().fill(colorScheme == .dark ? Theme.border.opacity(0.8) : .white.opacity(0.5)).frame(width: 1) }
     }
 }
 
 struct StudioHero: View {
+    @Environment(\.colorScheme) private var colorScheme
     var height: CGFloat
     var width: CGFloat
+    private var dark: Bool { colorScheme == .dark }
     var body: some View {
         ZStack(alignment: .leading) {
             GeometryReader { geometry in
-                Image("StudioHero").resizable().scaledToFill().frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                // Dark mode uses its own artwork, never the light image under a tint.
+                if dark, let art = NSImage(named: "StudioHeroDark"), art.size.width > 0 {
+                    // Fit the art's central band to the banner height and keep its focal object near 66% of the width,
+                    // blending both ends into the canvas, so a wide hero never loses its centerpiece to cropping.
+                    let size = geometry.size
+                    let height = size.height / 0.72, width = height * art.size.width / art.size.height
+                    let desired = size.width * 0.66 - width * 0.12
+                    let x = width >= size.width ? min(width / 2, max(size.width - width / 2, desired)) : desired
+                    // Crop more from the bottom than the top so the whole sphere stays inside the banner.
+                    let y = height / 2 - (height - size.height) * 0.2
+                    ZStack {
+                        Theme.paper
+                        Image(nsImage: art).resizable().frame(width: width, height: height).position(x: x, y: y)
+                            .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.16), .init(color: .black, location: 0.86), .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing)
+                                .frame(width: width, height: height).position(x: x, y: y))
+                    }.frame(width: size.width, height: size.height).clipped()
+                } else if dark {
+                    HeroDarkArt()
+                } else {
+                    Image("StudioHero").resizable().scaledToFill().frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                }
             }.accessibilityHidden(true)
-            LinearGradient(colors: [Color(hex: "EDF5FB").opacity(0.92), Color(hex: "EDF5FB").opacity(0.10), .clear], startPoint: .leading, endPoint: .trailing)
+            if dark {
+                LinearGradient(stops: [.init(color: Theme.paper.opacity(0.88), location: 0), .init(color: Theme.paper.opacity(0.55), location: 0.32), .init(color: .clear, location: 0.58)], startPoint: .leading, endPoint: .trailing)
+            } else {
+                LinearGradient(colors: [Color(hex: "EDF5FB").opacity(0.92), Color(hex: "EDF5FB").opacity(0.10), .clear], startPoint: .leading, endPoint: .trailing)
+            }
             VStack(alignment: .leading, spacing: height > 240 ? 10 : 7) {
-                Text("我的 AI 工作室").font(.system(size: width > 1150 ? 39 : 32, weight: .bold)).tracking(1).foregroundStyle(Color(hex: "111C27"))
-                Text("Make room for ideas.").font(.custom("Georgia-Italic", size: width > 1150 ? 29 : 24)).foregroundStyle(Color(hex: "366F69"))
+                Text("我的 AI 工作室").font(.system(size: width > 1150 ? 39 : 32, weight: .bold)).tracking(1).foregroundStyle(dark ? Color(hex: "F4F7FB") : Color(hex: "111C27"))
+                Text("Make room for ideas.").font(.custom("Georgia-Italic", size: width > 1150 ? 29 : 24)).foregroundStyle(dark ? Color(hex: "8FBCEB") : Color(hex: "366F69"))
                 VStack(alignment: .leading, spacing: 7) {
                     Text("一个人，也是一支团队。")
                     Text("接入工具、安排员工，把想法交给你的 AI 伙伴。")
-                }.font(.system(size: width > 1150 ? 16 : 13)).foregroundStyle(Color(hex: "465F78")).padding(.top, 10)
+                }.font(.system(size: width > 1150 ? 16 : 13)).foregroundStyle(dark ? Color(hex: "C7D0DA") : Color(hex: "465F78")).padding(.top, 10)
             }.padding(.leading, width > 1150 ? 51 : 30)
             if width > 1180 {
                 Text("让 AI 成为\n你最好的伙伴。").font(.custom("STKaiti", size: 23)).tracking(3).lineSpacing(9)
-                    .foregroundStyle(Color(hex: "385674")).rotationEffect(.degrees(-8)).frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 52).padding(.top, 63)
+                    .foregroundStyle(dark ? Color(hex: "EEF3F8") : Color(hex: "385674")).shadow(color: dark ? .black.opacity(0.6) : .clear, radius: 4).rotationEffect(.degrees(-8)).frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 52).padding(.top, 63)
             }
         }.frame(height: height).overlay(alignment: .bottom) {
-            LinearGradient(colors: [.clear, Theme.paper], startPoint: .top, endPoint: .bottom).frame(height: 35)
+            LinearGradient(colors: [.clear, Theme.paper], startPoint: .top, endPoint: .bottom).frame(height: dark ? 44 : 35)
         }
     }
 }
 
 struct StudioWorkspaceCard: View {
+    @Environment(\.colorScheme) private var colorScheme
     var area: WorkArea
     var members: [Employee]
     var tasks: [WorkTask]
@@ -148,7 +230,16 @@ struct StudioWorkspaceCard: View {
     var onTask: (WorkTask) -> Void
     var onNewTask: () -> Void
     var onAssign: (UUID, UUID) -> Bool
+    var projectCount: Int = 0
+    var onProjects: () -> Void = {}
+    var onEditEmployee: (Employee) -> Void = { _ in }
+    var onRemoveEmployee: (Employee) -> Void = { _ in }
+    var onDeleteEmployee: (Employee) -> Void = { _ in }
+    var onDeleteWorkspace: () -> Void = {}
+    var onAddExistingEmployee: () -> Void = {}
     private var tint: Color { StudioArtwork.tint(for: area) }
+    private var accent: Color { StudioArtwork.accent(for: area) }
+    private var dark: Bool { colorScheme == .dark }
     private var currentTasks: [WorkTask] {
         let active = tasks.filter { ![WorkStatus.completed, .cancelled].contains($0.status) }
         return Array((active + tasks.filter { [.completed, .cancelled].contains($0.status) }).prefix(3))
@@ -158,24 +249,29 @@ struct StudioWorkspaceCard: View {
             let narrow = geometry.size.width < 570
             HStack(spacing: 0) {
                 illustration(narrow: narrow).frame(width: geometry.size.width * (narrow ? 0.50 : 0.55))
+                if dark { Rectangle().fill(Theme.border.opacity(0.9)).frame(width: 1) }
                 details(narrow: narrow)
                     .padding(.horizontal, narrow ? 15 : 22).padding(.vertical, height < 290 ? 19 : 23).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .background(Theme.surface.opacity(0.84))
+                    .background(dark ? Theme.surface : Theme.surface.opacity(0.84))
             }
-        }.frame(height: height).background(tint.opacity(0.035)).clipShape(RoundedRectangle(cornerRadius: 17))
-            .overlay(RoundedRectangle(cornerRadius: 17).strokeBorder(tint.opacity(0.12)))
-            .shadow(color: tint.opacity(0.075), radius: 12, y: 5)
-            .contextMenu { Button("查看工作区", action: onOpen); Button("编辑工作区", action: onEdit); Button("添加员工", action: onAddEmployee).disabled(!available) }
+        }.frame(height: height).background(dark ? Theme.surface : tint.opacity(0.035)).clipShape(RoundedRectangle(cornerRadius: dark ? 18 : 17))
+            .overlay(RoundedRectangle(cornerRadius: dark ? 18 : 17).strokeBorder(dark ? Theme.border : tint.opacity(0.12)))
+            .shadow(color: dark ? .black.opacity(0.32) : tint.opacity(0.075), radius: dark ? 18 : 12, y: dark ? 8 : 5)
+            .contextMenu { Button("查看工作区", action: onOpen); Button("编辑工作区", action: onEdit); Button("新增员工", action: onAddEmployee).disabled(!available); Button("添加已有员工", action: onAddExistingEmployee).disabled(!available); Divider(); Button("删除工作区", role: .destructive, action: onDeleteWorkspace).disabled(!available) }
     }
     private func details(narrow: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("我的 AI 员工").font(.system(size: 12, weight: .semibold))
+                Text("我的 AI 员工").font(.system(size: 12, weight: .semibold)).foregroundStyle(dark ? Theme.primaryText : .primary)
                 Spacer()
-                Button(action: onAddEmployee) { Image(systemName: "plus").font(.system(size: 10)) }.buttonStyle(.plain).help("添加员工").disabled(!available)
+                Menu { Button("新增员工", action: onAddEmployee); Button("添加已有员工", action: onAddExistingEmployee) } label: { Image(systemName: "plus").font(.system(size: 10)) }.menuStyle(.borderlessButton).frame(width: 18).help("添加员工").disabled(!available)
             }
             memberStrip(narrow: narrow).frame(height: 40, alignment: .leading).padding(.top, 7)
-            Text("工作区任务").font(.system(size: 12, weight: .semibold)).padding(.top, narrow ? 15 : 20).padding(.bottom, 9)
+            HStack {
+                Text("工作区任务").font(.system(size: 12, weight: .semibold)).foregroundStyle(dark ? Theme.primaryText : .primary)
+                Spacer()
+                if projectCount > 0 { Button(action: onProjects) { Text("\(projectCount) 个项目 ›").font(.system(size: 10)) }.buttonStyle(.plain).foregroundStyle(accent).help("查看用到这个工作区的所有项目").accessibilityIdentifier("home.projects." + area.id.uuidString) }
+            }.padding(.top, narrow ? 15 : 20).padding(.bottom, 9)
             taskList(narrow: narrow)
             Spacer(minLength: 12)
             createButton(narrow: narrow)
@@ -185,8 +281,14 @@ struct StudioWorkspaceCard: View {
         HStack(spacing: narrow ? 5 : 7) {
             ForEach(Array(members.prefix(3))) { employee in
                 Button { onEmployee(employee) } label: {
-                    EmployeePortrait(symbol: employee.avatarSymbol, imageData: employee.avatarImageData, fallback: String(employee.name.prefix(1)), tint: tint).frame(width: narrow ? 27 : 33, height: narrow ? 27 : 33)
+                    EmployeePortrait(symbol: employee.avatarSymbol, imageData: employee.avatarImageData, fallback: String(employee.name.prefix(1)), tint: accent).frame(width: narrow ? 27 : 33, height: narrow ? 27 : 33)
                 }.buttonStyle(.plain).help(employee.name + " · " + employee.role).accessibilityLabel("查看员工 " + employee.name)
+                    .contextMenu {
+                        Button("查看员工档案") { onEmployee(employee) }
+                        Button("编辑员工") { onEditEmployee(employee) }
+                        Button("移出当前工作区") { onRemoveEmployee(employee) }
+                        Button("删除员工", role: .destructive) { onDeleteEmployee(employee) }
+                    }
                     .dropDestination(for: String.self) { values, _ in
                         guard let value = values.first, let taskID = UUID(uuidString: value) else { return false }
                         return onAssign(taskID, employee.id)
@@ -203,11 +305,13 @@ struct StudioWorkspaceCard: View {
         VStack(spacing: 7) {
             ForEach(currentTasks) { task in
                 Button { onTask(task) } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: task.status == .completed ? "checkmark.square" : "doc.text").font(.system(size: 10)).foregroundStyle(tint)
-                        Text(task.title).font(.system(size: narrow ? 10 : 11)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                        Text(task.status.title).font(.system(size: 10)).foregroundStyle(.secondary)
-                    }.padding(.horizontal, 6).frame(height: 23).background(tint.opacity(0.045), in: RoundedRectangle(cornerRadius: 6))
+                    HStack(spacing: dark ? 7 : 5) {
+                        Image(systemName: task.status == .completed ? "checkmark.square" : "doc.text").font(.system(size: dark ? 11 : 10)).foregroundStyle(accent)
+                        Text(task.title).font(.system(size: narrow ? 10 : 11)).foregroundStyle(dark ? Theme.primaryText : .primary).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                        Text(task.status.title).font(.system(size: 10)).foregroundStyle(dark ? Theme.secondaryText : .secondary)
+                    }.padding(.horizontal, dark ? 9 : 6).frame(height: dark ? 28 : 23)
+                        .background(dark ? AnyShapeStyle(Theme.raised) : AnyShapeStyle(tint.opacity(0.045)), in: RoundedRectangle(cornerRadius: dark ? 8 : 6))
+                        .overlay(RoundedRectangle(cornerRadius: dark ? 8 : 6).fill(tint.opacity(dark ? 0.06 : 0)))
                 }.buttonStyle(.plain).draggable(task.status == .draft ? task.id.uuidString : "")
             }
             if currentTasks.isEmpty {
@@ -226,39 +330,63 @@ struct StudioWorkspaceCard: View {
                 Text(hasEnabledMember ? StudioArtwork.taskTitle(for: area) : "添加 AI 员工")
             }
             .font(.system(size: narrow ? 11 : 12, weight: .semibold)).foregroundStyle(.white)
-            .frame(maxWidth: narrow ? .infinity : 170).frame(height: 39)
-            .background(LinearGradient(colors: [tint, tint.opacity(0.88)], startPoint: .topLeading, endPoint: .bottomTrailing), in: Capsule())
-            .overlay(Capsule().stroke(.white.opacity(0.55))).shadow(color: tint.opacity(0.16), radius: 8, y: 4)
+            .frame(maxWidth: narrow ? .infinity : (dark ? 210 : 170)).frame(height: dark ? 42 : 39)
+            .background(LinearGradient(colors: dark ? [accent, tint] : [tint, tint.opacity(0.88)], startPoint: dark ? .leading : .topLeading, endPoint: dark ? .trailing : .bottomTrailing), in: Capsule())
+            .overlay(Capsule().stroke(dark ? Color.white.opacity(0.16) : .white.opacity(0.55))).shadow(color: tint.opacity(dark ? 0.38 : 0.16), radius: dark ? 12 : 8, y: 4)
         }.buttonStyle(.plain).disabled(!available).accessibilityIdentifier("create-task-" + area.id.uuidString)
     }
     private func illustration(narrow: Bool) -> some View {
         ZStack(alignment: .topLeading) {
             GeometryReader { geometry in
-                if let name = StudioArtwork.name(for: area) {
+                if dark, let name = StudioArtwork.darkName(for: area), let art = NSImage(named: name), art.size.width > 0 {
+                    // As in the dark reference: the art spans the card width and rests on the bottom edge, so the object
+                    // sits below the title; the strip above fades into the art's own top color.
+                    let size = geometry.size
+                    let scale = max(size.width / art.size.width, size.height * 0.78 / art.size.height)
+                    let width = art.size.width * scale, height = art.size.height * scale
+                    ZStack {
+                        StudioArtwork.topColor(of: name, art)
+                        Image(nsImage: art).resizable().frame(width: width, height: height)
+                            .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.28)], startPoint: .top, endPoint: .bottom))
+                            // In wide cards, sink the art by a tenth: the cropped strip is reflective floor, and the object clears
+                            // the title. Narrow cards are tall enough already, and their open button sits bottom left.
+                            .position(x: size.width / 2, y: size.height - height / 2 + (size.height > size.width ? 0 : height * 0.10))
+                    }.frame(width: size.width, height: size.height).clipped()
+                } else if dark {
+                    ModuleDarkArt(kind: .of(area), tint: tint)
+                } else if let name = StudioArtwork.name(for: area) {
                     Image(name).resizable().scaledToFill().frame(width: geometry.size.width, height: geometry.size.height).clipped()
                 } else {
                     LinearGradient(colors: [tint.opacity(0.06), tint.opacity(0.27), tint.opacity(0.10)], startPoint: .topLeading, endPoint: .bottomTrailing)
                     Image(systemName: area.icon).font(.system(size: 90, weight: .ultraLight)).foregroundStyle(tint.gradient).frame(width: geometry.size.width, height: geometry.size.height).offset(y: 30)
                 }
             }.accessibilityHidden(true)
-            LinearGradient(colors: [.white.opacity(0.58), .white.opacity(0.12), .clear], startPoint: .top, endPoint: .bottom).frame(height: 126)
+            if dark {
+                // Only a light shade behind the title; the artwork stays vivid as in the reference.
+                LinearGradient(colors: [Color.black.opacity(0.42), Color.black.opacity(0.12), .clear], startPoint: .top, endPoint: .bottom).frame(height: 120)
+            } else {
+                LinearGradient(colors: [.white.opacity(0.58), .white.opacity(0.12), .clear], startPoint: .top, endPoint: .bottom).frame(height: 126)
+            }
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .top, spacing: narrow ? 8 : 13) {
-                    Image(systemName: area.icon).font(.system(size: narrow ? 19 : 25, weight: .medium)).foregroundStyle(tint).frame(width: narrow ? 37 : 48, height: narrow ? 40 : 48)
-                        .background(tint.opacity(0.18), in: RoundedRectangle(cornerRadius: 15))
+                    Image(systemName: area.icon).font(.system(size: narrow ? 19 : 25, weight: .medium)).foregroundStyle(accent).frame(width: narrow ? 37 : 48, height: narrow ? 40 : 48)
+                        .background(tint.opacity(dark ? 0.30 : 0.18), in: RoundedRectangle(cornerRadius: dark ? 13 : 15))
+                        .overlay(RoundedRectangle(cornerRadius: dark ? 13 : 15).stroke(dark ? tint.opacity(0.45) : .clear))
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(area.name).font(.system(size: narrow ? 20 : 25, weight: .bold)).lineLimit(1).minimumScaleFactor(0.7).foregroundStyle(Color(hex: "101C21"))
-                        Text(area.description).font(.system(size: narrow ? 10 : 12)).foregroundStyle(Color(hex: "586B72")).lineLimit(1).minimumScaleFactor(0.8)
+                        Text(area.name).font(.system(size: narrow ? 20 : 25, weight: .bold)).lineLimit(1).minimumScaleFactor(0.7).foregroundStyle(dark ? Color(hex: "F4F7FB") : Color(hex: "101C21"))
+                            .shadow(color: dark ? .black.opacity(0.45) : .clear, radius: 3)
+                        Text(area.description).font(.system(size: narrow ? 10 : 12)).foregroundStyle(dark ? Color(hex: "C3CCD6") : Color(hex: "586B72")).lineLimit(1).minimumScaleFactor(0.8)
                     }
                     Spacer(minLength: 0)
                 }
                 Spacer()
                 HStack {
                     Spacer()
-                    Text(StudioArtwork.note(for: area)).font(.custom("STKaiti", size: narrow ? 15 : 18)).tracking(2).lineSpacing(6).multilineTextAlignment(.center).foregroundStyle(Color(hex: "304752"))
+                    Text(StudioArtwork.note(for: area)).font(.custom("STKaiti", size: narrow ? 15 : 18)).tracking(2).lineSpacing(6).multilineTextAlignment(.center).foregroundStyle(dark ? Color(hex: "F4F7FB") : Color(hex: "304752"))
+                        .shadow(color: dark ? .black.opacity(0.7) : .clear, radius: 4)
                 }.padding(.trailing, 3)
             }.padding(narrow ? 17 : 23)
-            Button(action: onOpen) { Image(systemName: "arrow.right").font(.system(size: 16, weight: .medium)).foregroundStyle(Color(hex: "243C43")).frame(width: 35, height: 35).background(.white.opacity(0.6), in: Circle()).overlay(Circle().stroke(.white.opacity(0.9))) }
+            Button(action: onOpen) { Image(systemName: "arrow.right").font(.system(size: 16, weight: .medium)).foregroundStyle(dark ? Color.white : Color(hex: "243C43")).frame(width: 35, height: 35).background(dark ? Color.black.opacity(0.34) : .white.opacity(0.6), in: Circle()).overlay(Circle().stroke(dark ? Color.white.opacity(0.16) : .white.opacity(0.9))) }
                 .buttonStyle(.plain).help("打开" + area.name).accessibilityLabel("打开" + area.name).accessibilityIdentifier("studio.workspace." + area.id.uuidString).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: narrow ? .bottomLeading : .topTrailing).padding(narrow ? 15 : 23)
         }
     }

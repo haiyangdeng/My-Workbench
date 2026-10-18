@@ -37,6 +37,40 @@ public final class ComfyClient: @unchecked Sendable {
     public func checkConnection() async throws {
         _ = try await json(request("system_stats"))
     }
+    /// Version, GPU and VRAM from system_stats, queue length, and whether single-job cancel exists (required to run jobs).
+    public func health() async throws -> ServerHealth {
+        let stats = try await json(request("system_stats"))
+        var health = ServerHealth()
+        health.version = stats["system"]["comfyui_version"].string
+        if let device = stats["devices"].array?.first {
+            health.gpu = device["name"].string
+            if case .number(let total) = device["vram_total"] { health.vramTotal = Int64(total) }
+            if case .number(let free) = device["vram_free"] { health.vramFree = Int64(free) }
+        }
+        if let queue = try? await json(request("queue")) { health.queueLength = (queue["queue_running"].array?.count ?? 0) + (queue["queue_pending"].array?.count ?? 0) }
+        if let jobs = try? await json(request("api/jobs", query: [URLQueryItem(name: "limit", value: "1")])) { health.supportsJobCancel = jobs["jobs"].array != nil }
+        if let info = try? await json(request("object_info")), let classes = info.object?.keys { health.nodeClasses = Set(classes) }
+        return health
+    }
+    /// Uploads a local file to the server's input folder and returns the name a Load node expects ("subfolder/name").
+    public func upload(_ file: URL, subfolder: String = "workbench", maximumBytes: Int64) async throws -> String {
+        let values = try file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        guard values.isRegularFile == true else { throw WorkbenchError.unsafeArtifact }
+        guard Int64(values.fileSize ?? 0) <= maximumBytes else { throw MediaError.uploadTooLarge }
+        let boundary = "WorkbenchBoundary\(UUID().uuidString)"
+        var body = Data()
+        func field(_ name: String, _ value: String) { body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8)) }
+        field("subfolder", subfolder); field("type", "input"); field("overwrite", "false")
+        let safeName = file.lastPathComponent.replacingOccurrences(of: "\"", with: "_")
+        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"image\"; filename=\"\(safeName)\"\r\nContent-Type: application/octet-stream\r\n\r\n".utf8))
+        body.append(try Data(contentsOf: file)); body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        var upload = try request("upload/image", method: "POST")
+        upload.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type"); upload.httpBody = body
+        let result = try await json(upload)
+        guard let name = result["name"].string, !name.isEmpty else { throw RemoteError.malformedResponse }
+        let folder = result["subfolder"].string ?? ""
+        return folder.isEmpty ? name : folder + "/" + name
+    }
     public func submit(input: String, promptID: UUID, willSubmit: (() async throws -> Void)? = nil) async throws -> String {
         let workflow = try connection.workflow(input: input)
         // Require the job API before submission; its cancellation is atomic and scoped to one id.

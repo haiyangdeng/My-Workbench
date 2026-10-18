@@ -20,6 +20,7 @@ public enum WorkStatus: String, Codable, CaseIterable, Sendable {
 
 public struct ToolConfig: Identifiable, Codable, Equatable, Sendable {
     public var id: UUID
+    public var deletedAt: Date?
     public var name: String
     public var executable: String
     public var arguments: [String]
@@ -32,18 +33,35 @@ public struct ToolConfig: Identifiable, Codable, Equatable, Sendable {
     public var remote: ComfyConnection?
     public var loginStatusArguments: [String]?
     public var loginArguments: [String]?
+    public var resumeArguments: [String]?
+    public var outputFormat: CLIOutputFormat?
+    public var includeInstructions: Bool?
+    public var modelArguments: [String]?
+    public var structuredOutputArguments: [String]?
+    public var readOnlyArguments: [String]?
+    public var editArguments: [String]?
+    public var loggedOutText: String?
+    public var useLoginShellPath: Bool?
+    public var interactiveResumeArguments: [String]?
+    /// The CLI may be used for command steps in production plans (for example ffmpeg).
+    public var commandStep: Bool?
+    /// Most runs of this CLI at once (TL-11); nil means only the global limit applies.
+    public var concurrencyLimit: Int?
+    /// The detected version differs from the last one (TL-12); cleared by a successful check.
+    public var versionChanged: Bool?
 
     public init(id: UUID = UUID(), name: String, executable: String, arguments: [String]) {
         self.id = id; self.name = name; self.executable = executable; self.arguments = arguments
     }
 
     public func resolvedArguments(input: String) -> [String] {
-        arguments.map { $0.replacingOccurrences(of: "{input}", with: input) }
+        arguments.map { Self.expand($0, values: ["input": input, "prompt": input]) }
     }
 }
 
 public struct Employee: Identifiable, Codable, Equatable, Sendable {
     public var id: UUID
+    public var deletedAt: Date?
     public var name: String
     public var role: String
     public var department: String
@@ -53,6 +71,9 @@ public struct Employee: Identifiable, Codable, Equatable, Sendable {
     public var avatarSymbol: String?
     public var avatarImageData: Data?
     public var workspaceID: UUID?
+    public var additionalWorkspaceIDs: [UUID]?
+    public var maxAccess: AccessLevel?
+    public var model: String?
 
     public init(id: UUID = UUID(), name: String, role: String, department: String, instructions: String, toolID: UUID, avatarSymbol: String? = nil, avatarImageData: Data? = nil) {
         self.id = id; self.name = name; self.role = role; self.department = department
@@ -63,6 +84,7 @@ public struct Employee: Identifiable, Codable, Equatable, Sendable {
 
 public struct WorkTask: Identifiable, Codable, Equatable, Sendable {
     public var id: UUID
+    public var deletedAt: Date?
     public var title: String
     public var employeeID: UUID
     public var input: String
@@ -83,6 +105,10 @@ public struct WorkTask: Identifiable, Codable, Equatable, Sendable {
     public var reviewSourceRunID: UUID?
     public var toolSnapshot: ToolConfig?
     public var employeeSnapshot: Employee?
+    public var accessLevel: AccessLevel?
+    public var generation: GenerationSpec?
+    public var command: CommandSpec?
+    public var worktree: WorktreeInfo?
 
     public init(id: UUID = UUID(), title: String, employeeID: UUID, input: String, workingDirectory: String, acceptance: String) {
         self.id = id; self.title = title; self.employeeID = employeeID; self.input = input
@@ -96,8 +122,15 @@ public struct WorkTask: Identifiable, Codable, Equatable, Sendable {
 }
 
 public struct WorkspaceSnapshot: Codable, Equatable, Sendable {
-    public var schemaVersion = 3
+    public static let currentSchemaVersion = 4
+    public var schemaVersion = WorkspaceSnapshot.currentSchemaVersion
     public var workspaces: [WorkArea] = WorkArea.defaults
+    public var categories: [ProjectCategory] = []
+    public var conversations: [Conversation] = []
+    public var messages: [ChatMessage] = []
+    public var sessions: [AgentSession] = []
+    public var servers: [ComfyServer] = []
+    public var templates: [WorkflowTemplate] = []
     public var tools: [ToolConfig] = []
     public var employees: [Employee] = []
     public var tasks: [WorkTask] = []
@@ -108,11 +141,17 @@ public struct WorkspaceSnapshot: Codable, Equatable, Sendable {
     public var plans: [CollaborationPlan] = []
     public var reviews: [ReviewRecord] = []
     public init() {}
-    private enum CodingKeys: String, CodingKey { case schemaVersion, workspaces, tools, employees, tasks, projects, runs, artifacts, handoffs, plans, reviews }
+    private enum CodingKeys: String, CodingKey { case schemaVersion, workspaces, categories, conversations, messages, sessions, servers, templates, tools, employees, tasks, projects, runs, artifacts, handoffs, plans, reviews }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
         workspaces = try c.decodeIfPresent([WorkArea].self, forKey: .workspaces) ?? WorkArea.defaults
+        categories = try c.decodeIfPresent([ProjectCategory].self, forKey: .categories) ?? []
+        conversations = try c.decodeIfPresent([Conversation].self, forKey: .conversations) ?? []
+        messages = try c.decodeIfPresent([ChatMessage].self, forKey: .messages) ?? []
+        sessions = try c.decodeIfPresent([AgentSession].self, forKey: .sessions) ?? []
+        servers = try c.decodeIfPresent([ComfyServer].self, forKey: .servers) ?? []
+        templates = try c.decodeIfPresent([WorkflowTemplate].self, forKey: .templates) ?? []
         tools = try c.decodeIfPresent([ToolConfig].self, forKey: .tools) ?? []
         employees = try c.decodeIfPresent([Employee].self, forKey: .employees) ?? []
         tasks = try c.decodeIfPresent([WorkTask].self, forKey: .tasks) ?? []
@@ -130,6 +169,11 @@ public struct WorkspaceSnapshot: Codable, Equatable, Sendable {
         }
         for i in runs.indices where runs[i].status == .running || runs[i].status == .queued {
             runs[i].status = .interrupted; runs[i].endedAt = Date()
+        }
+        // Chat turns are never re-sent after a restart.
+        for i in messages.indices where messages[i].state?.isActive == true {
+            messages[i].state = .interrupted; messages[i].endedAt = messages[i].endedAt ?? Date()
+            messages[i].detail = "应用退出时这一轮还没有完成，没有自动重新发送。"
         }
     }
 }

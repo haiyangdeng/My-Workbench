@@ -21,10 +21,13 @@ public struct LoginCheck: Equatable, Sendable {
     public init(state: LoginState = .unknown, checkedAt: Date? = nil, detail: String = "") {
         self.state = state; self.checkedAt = checkedAt; self.detail = detail
     }
+    /// The logged-out text wins over the exit code; otherwise exit 0 means logged in. Timeouts and other failures stay "failed".
     public static func classify(tool: ToolConfig, result: ProcessResult, output: String) -> LoginCheck {
         let state: LoginState
-        if result.status == .review { state = .loggedIn }
-        else if tool.adapterKind == .codex && result.status == .failed && output.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "not logged in" { state = .loggedOut }
+        let marker = tool.migratingLegacyAdapter().loggedOutText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if result.timedOut || result.cancelled { state = .failed }
+        else if !marker.isEmpty && output.localizedCaseInsensitiveContains(marker) { state = .loggedOut }
+        else if result.status == .review { state = .loggedIn }
         else { state = .failed }
         // Store a bounded diagnostic in memory only; CLI output may contain private account data.
         return LoginCheck(state: state, checkedAt: Date(), detail: String(output.suffix(2000)))
@@ -34,10 +37,10 @@ public struct LoginCheck: Equatable, Sendable {
 extension ToolConfig {
     public var authenticationStatusArguments: [String]? {
         if adapterKind == .comfyUI { return nil }
-        return adapterKind == .codex ? ["login", "status"] : loginStatusArguments.flatMap { $0.isEmpty ? nil : $0 }
+        return migratingLegacyAdapter().loginStatusArguments.flatMap { $0.isEmpty ? nil : $0 }
     }
     public var authenticationLoginArguments: [String]? {
         if adapterKind == .comfyUI { return nil }
-        return adapterKind == .codex ? ["login"] : loginArguments.flatMap { $0.isEmpty ? nil : $0 }
+        return migratingLegacyAdapter().loginArguments.flatMap { $0.isEmpty ? nil : $0 }
     }
 }

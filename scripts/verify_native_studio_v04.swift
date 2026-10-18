@@ -16,7 +16,7 @@ import SwiftTerm
         let suite = "MyWorkbench.StudioV04.QA.\(UUID())"
         let preferences = UserDefaults(suiteName: suite)!
         defer { preferences.removePersistentDomain(forName: suite) }
-        preferences.set("paper", forKey: "studioThemeV04")
+        preferences.set("paper", forKey: "studioThemeV06")
         let store = WorkbenchStore(fileURL: root.appendingPathComponent("workspace.sqlite"))
         var tool = ToolConfig(name: "本地 CLI 验证", executable: "/usr/bin/printf", arguments: ["%s\\n", "{input}"])
         tool.loginStatusArguments = ["fixture logged in\\n"]; tool.loginArguments = ["fixture login complete\\n"]
@@ -59,9 +59,9 @@ import SwiftTerm
         }
         try await screenshot("native-v04-light-home")
         try await screenshot("native-v04-light-compact", width: 1100, height: 720, osDark: true)
-        preferences.set("ink", forKey: "studioThemeV04")
+        preferences.set("ink", forKey: "studioThemeV06")
         try await screenshot("native-v04-dark-home", osDark: true)
-        preferences.set("paper", forKey: "studioThemeV04")
+        preferences.set("paper", forKey: "studioThemeV06")
         terminals.open(employee: employee, tool: tool, directory: root.path)
         let session = terminals.selected!
         precondition(session.terminal.process.running)

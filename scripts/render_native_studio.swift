@@ -26,7 +26,11 @@ func render(_ name: String, _ width: CGFloat, _ height: CGFloat, dark: Bool = fa
     print("Rendered \(name) \(width)×\(height)")
 }
 render("native-empty", 1440, 900)
-store.addLocalExample()
+// The app no longer ships a demo; this fixture adds the same printf tool, agent and draft.
+let fixtureTool = ToolConfig(name: "本地输出验证", executable: "/usr/bin/printf", arguments: ["%s\n", "{input}"])
+let fixtureEmployee = Employee(name: "本地验证员", role: "执行器验证", department: "开发部", instructions: "验证输入原样输出，不调用AI服务。", toolID: fixtureTool.id)
+_ = store.addTool(fixtureTool); _ = store.addEmployee(fixtureEmployee)
+_ = store.addTask(WorkTask(title: "验证第一条本地任务", employeeID: fixtureEmployee.id, input: "你好，Workbench。", workingDirectory: FileManager.default.homeDirectoryForCurrentUser.path, acceptance: "日志中完整显示输入，退出码为0，再手动验收。"))
 render("native-configured", 1440, 900)
 render("native-compact", 1100, 720)
 render("native-dark", 1440, 900, dark: true)

@@ -2,6 +2,7 @@ import Foundation
 
 public struct WorkArea: Identifiable, Codable, Equatable, Sendable {
     public var id: UUID
+    public var deletedAt: Date?
     public var name: String
     public var icon: String
     public var color: String
@@ -26,12 +27,13 @@ public struct WorkArea: Identifiable, Codable, Equatable, Sendable {
 extension WorkspaceSnapshot {
     /// Only current employee records are migrated; archived execution snapshots stay intact.
     public mutating func migrateWorkspaces() {
-        for index in employees.indices {
-            if let id = employees[index].workspaceID, workspaces.contains(where: { $0.id == id }) { continue }
+        for index in employees.indices where !employees[index].isDeleted {
+            if employees[index].workspaceID == nil && employees[index].department.isEmpty { continue }
+            if let id = employees[index].workspaceID, workspaces.current.contains(where: { $0.id == id }) { continue }
             let department = employees[index].department
             let legacyIndex = WorkArea.legacyDepartments.firstIndex(of: department)
             let defaultID = legacyIndex.map { WorkArea.defaults[$0].id }
-            if let existing = workspaces.first(where: { $0.id == defaultID || $0.name == department }) {
+            if let existing = workspaces.current.first(where: { $0.id == defaultID || $0.name == department }) {
                 employees[index].workspaceID = existing.id
                 employees[index].department = existing.name
             } else {

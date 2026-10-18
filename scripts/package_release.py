@@ -11,7 +11,7 @@ import subprocess
 import zipfile
 
 root = Path(__file__).resolve().parents[1]
-app = root / '.build/release/Build/Products/Release/MyWorkbench.app'
+app = root / '.build/release/Build/Products/Release/Workbench.app'
 with (app / 'Contents/Info.plist').open('rb') as stream:
     info = plistlib.load(stream)
 version = info['CFBundleShortVersionString']
@@ -26,14 +26,14 @@ if stage.exists():
 stage.mkdir()
 release = root / 'releases'
 release.mkdir(exist_ok=True)
-app_stage = stage / f'MyWorkbench-{version}-macOS'
-source_stage = stage / f'MyWorkbench-{version}-source'
+app_stage = stage / f'Workbench-{version}-macOS'
+source_stage = stage / f'Workbench-{version}-source'
 app_stage.mkdir(); source_stage.mkdir()
-shutil.copytree(app, app_stage / 'MyWorkbench.app', symlinks=True)
+shutil.copytree(app, app_stage / 'Workbench.app', symlinks=True)
 
 def docs_to(destination):
     docs = destination / 'docs'; docs.mkdir()
-    for name in ['PRD.md', 'PRD_V04_ADDENDUM.md', 'DESIGN_REVIEW_V04.md', 'DESIGN_V05.md', 'AI员工工作台_PRD_v0.3.docx', 'DESIGN.md', 'DEVELOPMENT.md', 'VALIDATION.md', 'DELIVERY.md']:
+    for name in ['PRD.md', 'PRD_V06.md', 'PRD_V04_ADDENDUM.md', 'DESIGN_REVIEW_V04.md', 'DESIGN_V05.md', 'AI员工工作台_PRD_v0.3.docx', 'DESIGN.md', 'DEVELOPMENT.md', 'VALIDATION.md', 'DELIVERY.md', 'REVIEW_2026-10-18.md', 'OBJECT_MANAGEMENT.md']:
         shutil.copy2(root / 'docs' / name, docs / name)
     design = docs / 'design'; design.mkdir()
     for name in ['studio-v03.html', 'studio-overview.png', 'studio-compact.png', 'studio-profile-config.png', 'studio-team.png', 'studio-recruit-current.jpg', 'native-real-collaboration.png', 'native-collaboration-panel.png', 'native-profile-config.png', 'native-plan-approval.png', 'native-remote-config.png', 'native-multiple-employees.png']:
@@ -50,10 +50,15 @@ for name in ['Sources', 'Tests', 'Assets.xcassets', 'MyWorkbench.xcodeproj']:
 for name in ['Package.swift', 'Package.resolved', '.gitignore']:
     shutil.copy2(root / name, source_stage / name)
 scripts = source_stage / 'scripts'; scripts.mkdir()
-for name in ['build.sh', 'create_xcode_project.py', 'build_prd.py', 'render_prd.sh', 'render_native_studio.sh', 'render_native_studio.swift', 'verify_native_log_response.sh', 'verify_native_log_response.swift', 'verify_studio.cjs', 'verify_employees.cjs', 'verify_native_execution.sh', 'verify_native_execution.swift', 'verify_real_collaboration.sh', 'verify_real_collaboration.swift', 'comfy_fixture.py', 'package_release.sh', 'package_release.py']:
+for name in ['build.sh', 'create_xcode_project.py', 'build_prd.py', 'render_prd.sh', 'render_native_studio.sh', 'render_native_studio.swift', 'verify_native_log_response.sh', 'verify_native_log_response.swift', 'verify_studio.cjs', 'verify_employees.cjs', 'verify_native_execution.sh', 'verify_native_execution.swift', 'verify_real_collaboration.sh', 'verify_real_collaboration.swift', 'comfy_fixture.py', 'package_release.sh', 'package_release.py', 'render_theme_preview.sh', 'render_theme_preview.swift']:
     shutil.copy2(root / 'scripts' / name, scripts / name)
 for name in ['verify_native_studio_v04.sh', 'verify_native_studio_v04.swift', 'verify_native_studio_v05.sh', 'verify_native_studio_v05.swift', 'install_app_icon.py']:
     shutil.copy2(root / 'scripts' / name, scripts / name)
+for milestone in ['m5', 'm6m7', 'm8', 'm9', 'crud']:
+    for suffix in ['sh', 'swift']:
+        name = f'verify_{milestone}.{suffix}'
+        shutil.copy2(root / 'scripts' / name, scripts / name)
+shutil.copytree(root / 'scripts/fixtures', scripts / 'fixtures', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
 
 def sha(path):
     digest = hashlib.sha256()
@@ -63,21 +68,29 @@ def sha(path):
     return digest.hexdigest()
 
 manifest = {
+    'name': info['CFBundleDisplayName'],
     'version': version, 'build': info['CFBundleVersion'], 'bundleIdentifier': info['CFBundleIdentifier'],
     'createdAtUTC': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-    'architectures': subprocess.check_output(['lipo', '-archs', str(app / 'Contents/MacOS/MyWorkbench')], text=True).strip().split(),
+    'architectures': subprocess.check_output(['lipo', '-archs', str(app / 'Contents/MacOS/Workbench')], text=True).strip().split(),
     'signature': 'ad hoc; codesign --verify --deep --strict passed',
     'coreTests': {'passed': test_count, 'failed': 0},
-    'deliveryStatus': 'candidate; real remote generation and native manual QA pending',
+    'deliveryStatus': 'candidate; four reproduced issues and PRD gaps in the review report; real multi-turn CLI, remote generation and native manual QA pending',
+    'objectManagement': 'docs/OBJECT_MANAGEMENT.md',
+    'reviewReport': 'docs/REVIEW_2026-10-18.md',
     'sourceSHA256': {str(p.relative_to(root)): sha(p) for p in sorted((root / 'Sources').rglob('*.swift'))},
     'prdSHA256': sha(root / 'docs/AI员工工作台_PRD_v0.3.docx'),
     'v04RequirementsSHA256': sha(root / 'docs/PRD_V04_ADDENDUM.md'),
     'v05DesignSHA256': sha(root / 'docs/DESIGN_V05.md'),
+    'v06RequirementsSHA256': sha(root / 'docs/PRD_V06.md'),
     'studioArtworkSHA256': {str(p.relative_to(root)): sha(p) for p in sorted((root / 'Assets.xcassets').glob('Studio*.imageset/image.png'))},
     'appIconSHA256': sha(root / 'docs/design/icon-v04/master.png'),
     'terminalDependency': 'SwiftTerm 1.10.0 pinned',
 }
 for destination in [app_stage, source_stage]:
+    theme_report = root / 'work/theme-qa/theme-verification.json'
+    if theme_report.exists(): shutil.copy2(theme_report, destination / '深色外观验证记录.json')
+    crud_report = root / 'work/crud-qa/crud-verification.json'
+    if crud_report.exists(): shutil.copy2(crud_report, destination / '对象管理验证记录.json')
     (destination / 'build-manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
     audit = root / 'work/m4-real-delivery-audit.json'
     if not audit.exists(): audit = root / 'AI协作验收记录.json'

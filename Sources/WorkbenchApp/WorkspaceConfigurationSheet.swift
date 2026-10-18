@@ -13,7 +13,7 @@ struct StudioPrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(.system(size: 11, weight: .medium)).padding(.horizontal, 12).padding(.vertical, 8)
             .foregroundStyle(.white.opacity(isEnabled ? 1 : 0.8))
-            .background(Theme.blue.opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.35), in: RoundedRectangle(cornerRadius: 8))
+            .background(Theme.actionFill.opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.35), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

@@ -61,7 +61,7 @@ import SwiftTerm
         let suite = "MyWorkbench.StudioV05.QA.\(UUID())"
         let preferences = UserDefaults(suiteName: suite)!
         defer { preferences.removePersistentDomain(forName: suite) }
-        preferences.set("paper", forKey: "studioThemeV04")
+        preferences.set("paper", forKey: "studioThemeV06")
         precondition(Bundle.main.url(forResource: "Assets", withExtension: "car") != nil, "Run this harness as its app bundle so SwiftUI loads the compiled artwork catalog")
 
         let store = WorkbenchStore(fileURL: root.appendingPathComponent("workspace.sqlite"))
@@ -181,9 +181,9 @@ import SwiftTerm
         try await screenshot("native-v05-home-1560", assertLight: true)
         try await screenshot("native-v05-home-1440", width: 1440, height: 900, assertLight: true)
         try await screenshot("native-v05-home-compact", width: 1100, height: 720, osDark: true, assertLight: true)
-        preferences.set("ink", forKey: "studioThemeV04")
+        preferences.set("ink", forKey: "studioThemeV06")
         try await screenshot("native-v05-dark-home", width: 1440, height: 900, osDark: true)
-        preferences.set("paper", forKey: "studioThemeV04")
+        preferences.set("paper", forKey: "studioThemeV06")
         show(.home, id: "home-restored-paper")
         try await Task.sleep(nanoseconds: 300_000_000)
 

@@ -7,12 +7,20 @@ public enum ToolAdapter: String, Codable, CaseIterable, Sendable {
 
 public struct WorkProject: Identifiable, Codable, Equatable, Sendable {
     public var id: UUID
+    public var deletedAt: Date?
     public var name: String
     public var directory: String
     public var goal: String
+    public var categoryID: UUID?
+    public var moduleIDs: [UUID]?
+    public var archivedAt: Date?
+    public var createdAt: Date?
+    /// Copy accepted generation and command outputs into the project folder (MD-15).
+    public var autoExport: Bool?
     public init(id: UUID = UUID(), name: String, directory: String, goal: String = "") {
         self.id = id; self.name = name; self.directory = directory; self.goal = goal
     }
+    public var isArchived: Bool { archivedAt != nil || isDeleted }
 }
 
 public struct TaskRun: Identifiable, Codable, Equatable, Sendable {
@@ -22,6 +30,7 @@ public struct TaskRun: Identifiable, Codable, Equatable, Sendable {
     public var employee: Employee
     public var tool: ToolConfig
     public var input: String
+    public var acceptance: String?
     public var arguments: [String]
     public var workingDirectory: String
     public var outputDirectory: String
@@ -33,20 +42,33 @@ public struct TaskRun: Identifiable, Codable, Equatable, Sendable {
     public var feedback: String
     public var remotePromptID: String?
     public var remoteArtifacts: [RemoteArtifact]?
+    public var accessLevel: AccessLevel?
+    public var sessionID: String?
+    public var usage: CLIUsage?
+    public var model: String?
+    public var conversationID: UUID?
+    public var generation: GenerationSpec?
+    /// Every server job of this run, for variant runs that submit several.
+    public var remotePromptIDs: [String]?
+    /// The CLI's final reply, bounded, so step cards and task details can show it without reading files.
+    public var replyText: String?
     public init(id: UUID = UUID(), task: WorkTask, employee: Employee, tool: ToolConfig, directory: URL, feedback: String = "") {
         self.id = id; taskID = task.id; projectID = task.projectID; self.employee = employee; self.tool = tool
         self.feedback = feedback
         input = task.input + (feedback.isEmpty ? "" : "\n\n返工要求：\n" + feedback)
+        acceptance = task.acceptance
         workingDirectory = task.workingDirectory
         outputDirectory = directory.appendingPathComponent("output").path
         logPath = directory.appendingPathComponent("execution.log").path
-        arguments = tool.executionArguments(input: input, instructions: employee.instructions, output: outputDirectory)
+        arguments = (try? tool.invocation(CLIInvocation(prompt: input, instructions: employee.instructions, outputDirectory: outputDirectory, workingDirectory: workingDirectory))) ?? tool.resolvedArguments(input: input)
         status = .running; startedAt = Date()
     }
 }
 
 public struct WorkArtifact: Identifiable, Codable, Equatable, Sendable {
     public var id: UUID
+    public var displayName: String?
+    public var deletedAt: Date?
     public var taskID: UUID
     public var runID: UUID
     public var projectID: UUID?
@@ -86,14 +108,7 @@ public struct WorkHandoff: Identifiable, Codable, Equatable, Sendable {
 extension ToolConfig {
     public var adapterKind: ToolAdapter { adapter ?? .command }
     public var timeout: TimeInterval { let value = timeoutSeconds ?? 1800; return value.isFinite ? min(86400, max(0.1, value)) : 1800 }
-    public var isEnabled: Bool { enabled ?? true }
-    public func executionArguments(input: String, instructions: String, output: String) -> [String] {
-        if adapterKind == .codex {
-            let prompt = "职责：\n\(instructions)\n\n任务：\n\(input)\n\n最终回复会自动保存为：\(output)/result.md。其他产物目录：\(output)"
-            return ["exec", "--json", "--sandbox", codexWorkspaceWrite == true ? "workspace-write" : "read-only", "--output-last-message", output + "/result.md"] + (codexWorkspaceWrite == true ? ["--add-dir", output] : []) + ["--", prompt]
-        }
-        return resolvedArguments(input: input).map { $0.replacingOccurrences(of: "{output}", with: output) }
-    }
+    public var isEnabled: Bool { !isDeleted && (enabled ?? true) }
 }
 
 extension WorkspaceSnapshot {

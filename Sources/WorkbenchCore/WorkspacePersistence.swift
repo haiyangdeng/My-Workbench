@@ -9,9 +9,10 @@ public struct WorkspacePersistence {
         if fileURL.pathExtension == "sqlite" { return try SQLiteWorkspace(url: fileURL).load() }
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return WorkspaceSnapshot() }
         var snapshot = try JSONDecoder().decode(WorkspaceSnapshot.self, from: Data(contentsOf: fileURL))
-        guard (1...3).contains(snapshot.schemaVersion) else { throw WorkbenchError.unsupportedSchema }
-        snapshot.schemaVersion = 3
+        guard (1...WorkspaceSnapshot.currentSchemaVersion).contains(snapshot.schemaVersion) else { throw WorkbenchError.unsupportedSchema }
         snapshot.migrateWorkspaces()
+        snapshot.migrateToV4()
+        snapshot.migrateLegacyComfyTools()
         snapshot.recoverInterruptedTasks()
         return snapshot
     }

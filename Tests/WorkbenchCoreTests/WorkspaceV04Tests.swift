@@ -73,16 +73,16 @@ final class WorkspaceV04Tests: XCTestCase {
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any]); json.removeValue(forKey: "workspaces")
         let url = root.appendingPathComponent("workspace.json"); try JSONSerialization.data(withJSONObject: json).write(to: url)
         let loaded = try WorkspacePersistence(fileURL: url).load()
-        XCTAssertEqual(loaded.schemaVersion, 3); XCTAssertEqual(loaded.workspaces.count, 4)
+        XCTAssertEqual(loaded.schemaVersion, 4); XCTAssertEqual(loaded.workspaces.count, 4)
         XCTAssertEqual(loaded.employees[0].workspaceID, WorkArea.defaults[1].id)
     }
 
-    func testLoginClassificationKeepsFailureDistinctFromLoggedOut() {
+    func testLegacyCodexLoginClassificationKeepsFailureDistinctFromLoggedOut() {
         var tool = ToolConfig(name: "Codex", executable: "/tool", arguments: []); tool.adapter = .codex
         XCTAssertEqual(tool.authenticationStatusArguments, ["login", "status"])
         XCTAssertEqual(LoginCheck.classify(tool: tool, result: ProcessResult(exitCode: 0, cancelled: false), output: "Logged in using ChatGPT").state, .loggedIn)
         XCTAssertEqual(LoginCheck.classify(tool: tool, result: ProcessResult(exitCode: 1, cancelled: false), output: "Not logged in\n").state, .loggedOut)
-        XCTAssertEqual(LoginCheck.classify(tool: tool, result: ProcessResult(exitCode: 1, cancelled: false), output: "Network failure: Not logged in unknown").state, .failed)
+        XCTAssertEqual(LoginCheck.classify(tool: tool, result: ProcessResult(exitCode: 1, cancelled: false), output: "Network failure").state, .failed)
         XCTAssertEqual(LoginCheck.classify(tool: tool, result: ProcessResult(exitCode: 1, cancelled: false, timedOut: true), output: "Not logged in").state, .failed)
         tool.adapter = .command; XCTAssertNil(tool.authenticationStatusArguments)
         tool.loginStatusArguments = ["status"]; XCTAssertEqual(tool.authenticationStatusArguments, ["status"])
