@@ -423,7 +423,7 @@ private struct TemplateRequest: Identifiable {
             }.padding(6).background(Color(hex: "080B1E"), in: StudioShape(10, pixel: true)).overlay(StudioShape(10, pixel: true).stroke(Color(hex: "2A3672"), lineWidth: 2))
         }
     }
-    private func applyAppearance() { NSApp?.appearance = NSAppearance(named: style.isDark ? .darkAqua : .aqua) }
+    private func applyAppearance() { style.applyAppearance() }
     private func openProject(_ id: UUID) {
         store.activeProjectID = id; openProjectID = id; selection = nil
         openConversationID = store.conversations(in: id).first?.id

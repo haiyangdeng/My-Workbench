@@ -54,7 +54,9 @@ extension WorkbenchStore {
     func setProjectArchived(_ id: UUID, _ archived: Bool) {
         guard var project = project(id), project.isArchived != archived else { return }
         project.archivedAt = archived ? Date() : nil
-        if updateProject(project), archived, activeProjectID == id { activeProjectID = activeProjects.first?.id }
+        guard updateProject(project) else { return }
+        if archived, activeProjectID == id { activeProjectID = activeProjects.first?.id }
+        if !archived { schedulePending(); scheduleTurns() }
     }
 
     /// Media-only projects may skip choosing a folder; they get one inside the app's data folder.

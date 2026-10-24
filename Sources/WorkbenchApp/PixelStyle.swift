@@ -9,6 +9,12 @@ enum StudioStyle: String, CaseIterable, Identifiable {
     static func from(_ raw: String) -> StudioStyle { StudioStyle(rawValue: raw) ?? .ink }
     var isDark: Bool { self != .paper }
     var isPixel: Bool { self == .pixel }
+    var iconName: String { isPixel ? "StudioIconPixel" : "AppIcon" }
+    var icon: NSImage? { NSImage(named: iconName) }
+    @MainActor func applyAppearance() {
+        NSApp?.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
+        NSApp?.applicationIconImage = icon
+    }
     var title: String {
         switch self {
         case .ink: "夜幕 · 深色（默认）"

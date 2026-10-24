@@ -7,6 +7,7 @@ public struct RunArchive: Sendable {
         root.appendingPathComponent("projects/\(projectID?.uuidString ?? "unassigned")/runs/\(runID.uuidString)", isDirectory: true)
     }
     public func prepare(runID: UUID, projectID: UUID?) throws -> URL {
+        _ = try outputDirectory(runID: runID, projectID: projectID, allowMissing: true)
         let directory = directory(runID: runID, projectID: projectID)
         guard !FileManager.default.fileExists(atPath: directory.path) else {
             throw NSError(domain: "MyWorkbench.Archive", code: 1, userInfo: [NSLocalizedDescriptionKey: "执行编号已存在，不能覆盖旧记录。"])
@@ -14,10 +15,24 @@ public struct RunArchive: Sendable {
         try FileManager.default.createDirectory(at: directory.appendingPathComponent("output"), withIntermediateDirectories: true)
         return directory
     }
+    /// Check every directory below the configured archive root, including a replaced run or project folder.
+    private func outputDirectory(runID: UUID, projectID: UUID?, allowMissing: Bool = false) throws -> URL {
+        let components = ["projects", projectID?.uuidString ?? "unassigned", "runs", runID.uuidString, "output"]
+        var output = root.standardizedFileURL
+        for component in components {
+            output.appendPathComponent(component, isDirectory: true)
+            if let values = try? output.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey]) {
+                guard values.isSymbolicLink != true, values.isDirectory == true else { throw WorkbenchError.unsafeArtifact }
+            } else if !allowMissing { throw WorkbenchError.unsafeArtifact }
+        }
+        let expected = components.reduce(root.resolvingSymlinksInPath().standardizedFileURL) { $0.appendingPathComponent($1, isDirectory: true) }
+        guard output.resolvingSymlinksInPath().standardizedFileURL.path == expected.path else { throw WorkbenchError.unsafeArtifact }
+        return output
+    }
     public func artifacts(for run: TaskRun) throws -> [WorkArtifact] {
         let output = URL(fileURLWithPath: run.outputDirectory).standardizedFileURL
-        let owned = directory(runID: run.id, projectID: run.projectID).appendingPathComponent("output").standardizedFileURL
-        guard output == owned, output.resolvingSymlinksInPath().path.hasPrefix(root.resolvingSymlinksInPath().path + "/"), (try output.resourceValues(forKeys: [.isSymbolicLinkKey])).isSymbolicLink != true else { throw WorkbenchError.unsafeArtifact }
+        let owned = try outputDirectory(runID: run.id, projectID: run.projectID)
+        guard output.path == owned.path else { throw WorkbenchError.unsafeArtifact }
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
         guard let enumerator = FileManager.default.enumerator(at: output, includingPropertiesForKeys: Array(keys)) else { return [] }
         var result: [WorkArtifact] = []
@@ -35,8 +50,8 @@ public struct RunArchive: Sendable {
     public func url(for artifact: WorkArtifact) throws -> URL {
         guard !artifact.relativePath.hasPrefix("/"), !artifact.relativePath.split(separator: "/").contains("..") else { throw WorkbenchError.unsafeArtifact }
         let file = root.appendingPathComponent(artifact.relativePath).standardizedFileURL
-        let owned = directory(runID: artifact.runID, projectID: artifact.projectID).appendingPathComponent("output").resolvingSymlinksInPath()
-        guard file.resolvingSymlinksInPath().path.hasPrefix(owned.path + "/") else { throw WorkbenchError.unsafeArtifact }
+        let owned = try outputDirectory(runID: artifact.runID, projectID: artifact.projectID)
+        guard file.path.hasPrefix(owned.path + "/"), file.resolvingSymlinksInPath().path.hasPrefix(owned.resolvingSymlinksInPath().path + "/") else { throw WorkbenchError.unsafeArtifact }
         let values = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
         guard values.isRegularFile == true, values.isSymbolicLink != true else { throw WorkbenchError.unsafeArtifact }
         return file
@@ -44,8 +59,8 @@ public struct RunArchive: Sendable {
     public func importFile(_ source: URL, into run: TaskRun, named name: String? = nil) throws {
         let values = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
         guard values.isRegularFile == true, values.isSymbolicLink != true else { throw WorkbenchError.unsafeArtifact }
-        let output = directory(runID: run.id, projectID: run.projectID).appendingPathComponent("output")
-        guard URL(fileURLWithPath: run.outputDirectory).standardizedFileURL == output.standardizedFileURL else { throw WorkbenchError.unsafeArtifact }
+        let output = try outputDirectory(runID: run.id, projectID: run.projectID)
+        guard URL(fileURLWithPath: run.outputDirectory).standardizedFileURL.path == output.standardizedFileURL.path else { throw WorkbenchError.unsafeArtifact }
         let filename = name ?? source.lastPathComponent
         guard !filename.isEmpty, filename != ".", filename != "..", !filename.contains("/"), !filename.contains("\\") else { throw WorkbenchError.unsafeArtifact }
         let sourceName = URL(fileURLWithPath: filename)

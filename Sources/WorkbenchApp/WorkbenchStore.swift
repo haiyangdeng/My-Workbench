@@ -241,12 +241,13 @@ final class WorkbenchStore: ObservableObject {
         let queued = snapshot.tasks.enumerated().filter { $0.element.status == .queued && $0.element.archivedAt == nil && !$0.element.isDeleted }
             .sorted { ($0.element.createdAt, -$0.offset) < ($1.element.createdAt, -$1.offset) }.map(\.element)
         for task in queued {
+            if isArchived(projectID: task.projectID) { continue }
             if task.generation == nil && localRuns() >= capacity { continue }
             if let planID = task.planID, snapshot.plans.first(where: { $0.id == planID })?.paused == true { continue }
             let ready = (task.dependencyIDs ?? []).allSatisfy { dependency in snapshot.tasks.contains { $0.id == dependency && $0.status == .completed } }
             guard ready else { continue }
             if task.generation != nil { if canStartGeneration(task) { startGeneration(task.id) }; continue }
-            if let employee = employee(task.employeeID), let tool = tool(employee.toolID), task.command == nil, let limit = tool.concurrencyLimit, activeRunCount(toolID: tool.id) >= limit { continue }
+            if let tool = executionTool(for: task), let limit = tool.concurrencyLimit, activeRunCount(toolID: tool.id) >= limit { continue }
             // A step whose worktree is still being created must not start in the project folder meanwhile.
             if preparingWorktrees.contains(task.id) { continue }
             if needsWorktree(task) { prepareWorktree(task.id); continue }
@@ -256,12 +257,18 @@ final class WorkbenchStore: ObservableObject {
             start(task.id)
         }
     }
+    func executionTool(for task: WorkTask) -> ToolConfig? {
+        if let command = task.command { return tool(command.toolID) }
+        return employee(task.employeeID).flatMap { tool($0.toolID) }
+    }
     private func start(_ id: UUID) {
-        guard let index = snapshot.tasks.firstIndex(where: { $0.id == id }),
+        guard let index = snapshot.tasks.firstIndex(where: { $0.id == id && $0.status == .queued && !$0.isDeleted && $0.archivedAt == nil }),
+              !isArchived(projectID: snapshot.tasks[index].projectID),
               let employee = employee(snapshot.tasks[index].employeeID), let ownTool = tool(employee.toolID), ownTool.isEnabled, employee.enabled ?? true else { return }
         var task = snapshot.tasks[index]
         // A command step runs its own CLI (for example ffmpeg) with the plan's arguments, not the owner's CLI.
-        guard let tool = task.command.map({ self.tool($0.toolID) }) ?? ownTool, tool.isEnabled else { return }
+        guard let tool = executionTool(for: task), tool.isEnabled else { return }
+        if let limit = tool.concurrencyLimit, activeRunCount(toolID: tool.id) >= limit { return }
         let runID = UUID()
         do {
             if !(task.dependencyIDs ?? []).isEmpty {
@@ -336,7 +343,7 @@ final class WorkbenchStore: ObservableObject {
                         let summary = collector.finish()
                         recordOutput(summary, runID: runID, outputDirectory: run.outputDirectory, format: tool.format, structured: requestedStructure, log: log)
                         if let baseline {
-                            await writeChangeEvidence(files: await changedFiles(since: baseline, directory: run.workingDirectory), directory: run.workingDirectory, outputDirectory: run.outputDirectory, log: log)
+                            await writeChangeEvidence(files: await changedFiles(since: baseline, directory: run.workingDirectory), directory: run.workingDirectory, outputDirectory: run.outputDirectory, log: log, baseline: baseline)
                         }
                         log.append("\n[system] 退出码 \(result.exitCode) · \(result.status.title)\n")
                     }

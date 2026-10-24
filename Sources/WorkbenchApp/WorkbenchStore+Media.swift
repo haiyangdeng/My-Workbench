@@ -139,6 +139,7 @@ extension WorkbenchStore {
 
     /// Job limit per server, and the plan's budget cap (MD-18): before a job would go over, stop submitting and pause the plan.
     func canStartGeneration(_ task: WorkTask) -> Bool {
+        guard !task.isDeleted, task.archivedAt == nil, !isArchived(projectID: task.projectID) else { return false }
         guard let spec = task.generation, let server = snapshot.server(spec.serverID) else { return false }
         let onServer = activeRuns.values.filter { runID in snapshot.runs.first { $0.id == runID }?.generation?.serverID == server.id }.count
         guard onServer < server.jobLimit else { return false }
@@ -230,7 +231,8 @@ extension WorkbenchStore {
     // MARK: Running a generation job (MD-08, MD-10)
 
     func startGeneration(_ id: UUID) {
-        guard let index = snapshot.tasks.firstIndex(where: { $0.id == id && $0.status == .queued }), let spec = snapshot.tasks[index].generation,
+        guard let index = snapshot.tasks.firstIndex(where: { $0.id == id && $0.status == .queued && !$0.isDeleted && $0.archivedAt == nil }),
+              !isArchived(projectID: snapshot.tasks[index].projectID), let spec = snapshot.tasks[index].generation,
               let template = snapshot.template(spec.templateID), !template.isDeleted, let server = snapshot.server(spec.serverID), server.enabled else { return }
         let task = snapshot.tasks[index]
         let owner = employee(task.employeeID) ?? Employee(id: Self.manualOwnerID, name: "手动生成", role: "", department: "", instructions: "", toolID: server.id)

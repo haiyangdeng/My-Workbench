@@ -134,8 +134,8 @@ struct StudioSidebar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 9) {
-                if let icon = NSImage(named: "AppIcon") {
-                    Image(nsImage: icon).resizable().scaledToFit().frame(width: 38, height: 38)
+                if let icon = style.icon {
+                    Image(nsImage: icon).resizable().interpolation(pixel ? .none : .high).scaledToFit().frame(width: 38, height: 38)
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Workbench").font(.system(size: pixel ? 16 : 18, weight: pixel ? .heavy : .bold, design: pixel ? .monospaced : .default))

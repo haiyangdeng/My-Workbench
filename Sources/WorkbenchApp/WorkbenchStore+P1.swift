@@ -67,24 +67,20 @@ extension WorkbenchStore {
         await GitRepository(directory: directory).diff(files: files)
     }
 
-    /// Git status and content fingerprints of the changed files, taken before an Edit run (nil outside a git work tree).
-    func changeBaseline(_ directory: String) async -> (status: [String: String], content: [String: String])? {
-        guard let status = await gitStatus(directory) else { return nil }
-        let content = await Task.detached { GitRepository.fingerprints(directory: directory, files: status.keys) }.value
-        return (status, content)
+    /// The initial HEAD and working contents, taken before an Edit run (nil outside a git work tree).
+    func changeBaseline(_ directory: String) async -> GitChangeBaseline? {
+        await GitRepository(directory: directory).changeBaseline()
     }
     /// Files the run changed since the baseline, including further edits to files that were already modified.
-    func changedFiles(since baseline: (status: [String: String], content: [String: String]), directory: String) async -> [String] {
-        let after = await gitStatus(directory) ?? baseline.status
-        let unchangedStatus = Set(baseline.content.keys.filter { after[$0] == baseline.status[$0] })
-        let contentAfter = await Task.detached { GitRepository.fingerprints(directory: directory, files: unchangedStatus) }.value
-        return GitRepository.changedFiles(before: baseline.status, after: after, beforeContent: baseline.content.filter { unchangedStatus.contains($0.key) }, afterContent: contentAfter)
+    func changedFiles(since baseline: GitChangeBaseline, directory: String) async -> [String] {
+        await GitRepository(directory: directory).changedFiles(since: baseline)
     }
     /// Saves the files an Edit step changed, with their diff, as `changes.diff` in the run's outputs. Reviewers receive it
     /// as evidence (TM-07); without it they only see the step's reply and cannot check work done in the project.
-    func writeChangeEvidence(files: [String], directory: String, outputDirectory: String, log: RunLog) async {
+    func writeChangeEvidence(files: [String], directory: String, outputDirectory: String, log: RunLog, baseline: GitChangeBaseline? = nil) async {
         guard !files.isEmpty else { return }
-        var diff = await GitRepository(directory: directory).diff(files: files)
+        let repository = GitRepository(directory: directory)
+        var diff = if let baseline { await repository.diff(files: files, since: baseline) } else { await repository.diff(files: files) }
         let limit = 200_000
         if diff.utf8.count > limit { diff = String(decoding: Data(diff.utf8.prefix(limit)), as: UTF8.self) + "\n…（差异超过 200 KB，其余已省略）\n" }
         let body = "本次运行在项目中改动的文件（\(files.count) 个）：\n" + files.map { "- " + $0 }.joined(separator: "\n") + "\n\n" + diff
@@ -92,6 +88,14 @@ extension WorkbenchStore {
             try body.write(to: URL(fileURLWithPath: outputDirectory).appendingPathComponent("changes.diff"), atomically: true, encoding: .utf8)
             log.append("[system] 本次改动了 \(files.count) 个文件，差异已保存为 changes.diff\n")
         } catch { log.append("[system] 改动记录保存失败：\(error.localizedDescription)\n") }
+    }
+
+    /// New turns show their saved run diff; older records retain the live-diff fallback.
+    func changedDiff(for turn: ChatMessage, directory: String, files: [String]) async -> String {
+        if let runID = turn.runID,
+           let artifact = artifacts(for: runID).first(where: { $0.relativePath.hasSuffix("/output/changes.diff") }),
+           let url = try? archive.url(for: artifact), let text = try? String(contentsOf: url, encoding: .utf8) { return text }
+        return await diff(directory: directory, files: files)
     }
 
     // MARK: TM-08 worktrees
@@ -105,7 +109,7 @@ extension WorkbenchStore {
 
     /// Creates the step's own worktree on a new branch, then queues it again to run there.
     func prepareWorktree(_ id: UUID) {
-        guard let task = snapshot.tasks.first(where: { $0.id == id }) else { return }
+        guard let task = snapshot.tasks.first(where: { $0.id == id }), !isArchived(projectID: task.projectID) else { return }
         preparingWorktrees.insert(id)
         let repositoryPath = task.workingDirectory
         let path = archive.root.appendingPathComponent("worktrees/\(id.uuidString)").path

@@ -168,6 +168,7 @@ extension WorkbenchStore {
             guard let user = message(turn.replyToID), let agent = employee(agentID), let project = conversation(turn.conversationID).flatMap({ project($0.projectID) }) else {
                 failTurn(turn.id, "原消息、员工或项目已不存在。"); continue
             }
+            if project.isArchived { continue }
             let level = turnAccess(requested: user.access, agent: agent, mode: user.mode ?? .single, kind: turn.turnKind)
             if level == .edit && editLocked(project.directory) { continue }
             if let tool = tool(agent.toolID), let limit = tool.concurrencyLimit, activeRunCount(toolID: tool.id) >= limit { continue }
@@ -287,7 +288,10 @@ extension WorkbenchStore {
                 } catch { log.append("\n[system] \(error.localizedDescription)\n"); tail.append(error.localizedDescription) } }
                 refresher.cancel()
                 var changed: [String]?
-                if let baseline { changed = await changedFiles(since: baseline, directory: run.workingDirectory) }
+                if let baseline {
+                    changed = await changedFiles(since: baseline, directory: run.workingDirectory)
+                    await writeChangeEvidence(files: changed ?? [], directory: run.workingDirectory, outputDirectory: run.outputDirectory, log: log, baseline: baseline)
+                }
                 let live = buffer.take() ?? liveTurns[id]
                 try? log.close()
                 finishTurn(id, runID: runID, status: status, exit: exit, summary: summary, tail: tail.text, live: live, tool: tool, sessionID: sessionID, changedFiles: changed)
@@ -523,6 +527,7 @@ extension WorkbenchStore {
             let draft = try JSONDecoder().decode(ProductionPlanDTO.self, from: data).toDraft(directorID: directorID)
             try draft.validate(workspace: snapshot)
             try snapshot.validateProduction(draft, attachments: user.attachments ?? [])
+            try validateDirectorScope(draft, user: user)
             snapshot.messages[index].planDraft = draft
             let generates = draft.steps.filter { $0.stepKind == .generate }.count
             snapshot.messages[index].text = "制作计划共 \(draft.steps.count) 步，其中 \(generates) 个生成任务。请审阅参数和预算后再启动。"
@@ -538,6 +543,17 @@ extension WorkbenchStore {
             } else {
                 snapshot.messages[index].state = .failed
                 snapshot.messages[index].detail = "导演两次都没有返回可用的制作计划：\(reason)"
+            }
+        }
+    }
+
+    private func validateDirectorScope(_ draft: PlanDraft, user: ChatMessage) throws {
+        for step in draft.steps where step.stepKind == .generate {
+            if let ids = user.directorTemplateIDs, !ids.contains(where: { $0 == step.templateID }) {
+                throw MediaError.invalidStep("「\(step.title)」使用了本次需求未授权的模板，请在已选模板范围内规划")
+            }
+            if let ids = user.directorServerIDs, !ids.contains(where: { $0 == step.serverID }) {
+                throw MediaError.invalidStep("「\(step.title)」使用了本次需求未授权的服务器，请在已选服务器范围内规划")
             }
         }
     }
@@ -564,6 +580,7 @@ extension WorkbenchStore {
             try BudgetCap.validate(minutes: budgetMinutes, cost: budgetCost, hasGenerateSteps: draft.steps.contains { $0.stepKind == .generate })
             try draft.validate(workspace: snapshot)
             try snapshot.validateProduction(draft, attachments: attachments)
+            try validateDirectorScope(draft, user: user)
         } catch { errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription; return nil }
         let planID = UUID(), mapping = Dictionary(uniqueKeysWithValues: draft.steps.map { ($0.id, UUID()) })
         var tasks: [WorkTask] = []

@@ -384,7 +384,7 @@ private struct TurnCard: View {
         } label: { Text("改动了 \(files.count) 个文件").font(.system(size: 10)).foregroundStyle(.orange) }
             .sheet(isPresented: $showDiff) {
                 let directory = store.conversation(turn.conversationID).flatMap { store.project($0.projectID)?.directory } ?? ""
-                DiffSheet(title: "这一轮改动的文件") { await store.diff(directory: directory, files: files) }
+                DiffSheet(title: "这一轮改动的文件") { await store.changedDiff(for: turn, directory: directory, files: files) }
             }
     }
 

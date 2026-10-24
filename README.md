@@ -2,7 +2,7 @@
 
 **Your one-person AI studio for macOS.** Workbench brings your AI tools into one native Mac app. Bring Codex, Claude Code or any command-line agent, give each one a role, and run code, video, audio and design work from a single studio on your own machine.
 
-[**Download v1.0.0**](https://github.com/haiyangdeng/My-Workbench/releases/download/v1.0.0/Workbench-1.0.0.dmg) · [Homepage](https://haiyangdeng.github.io/My-Workbench/) · [Releases](https://github.com/haiyangdeng/My-Workbench/releases) · [MIT License](LICENSE)
+[**Download v1.0.1**](https://github.com/haiyangdeng/My-Workbench/releases/download/v1.0.1/Workbench-1.0.1.dmg) · [Homepage](https://haiyangdeng.github.io/My-Workbench/) · [Releases](https://github.com/haiyangdeng/My-Workbench/releases) · [MIT License](LICENSE)
 
 ![Workbench home in the Pixel look: four workspace cards for video, audio, code and design](site/assets/screens/home-pixel.jpg)
 
@@ -36,7 +36,7 @@
 
 **Projects and categories.** All projects are grouped by category, with filters by category, workspace and status. A cross-project asset library, a knowledge base, and ⌘K search over everything.
 
-**Three looks.** Ink (the default dark look), Pixel (arcade night, shown above) and Paper (light).
+**Three looks.** Ink (the default dark look), Pixel (arcade night, shown above) and Paper (light). The sidebar and running Dock icon follow the selected style, including a matching Pixel icon.
 
 **Local-first.**
 
@@ -51,7 +51,7 @@
 
 ## Install
 
-1. Download [Workbench-1.0.0.dmg](https://github.com/haiyangdeng/My-Workbench/releases/download/v1.0.0/Workbench-1.0.0.dmg), open it and drag **Workbench** to **Applications**.
+1. Download [Workbench-1.0.1.dmg](https://github.com/haiyangdeng/My-Workbench/releases/download/v1.0.1/Workbench-1.0.1.dmg), open it and drag **Workbench** to **Applications**.
 2. The first launch is blocked, because this build is signed ad hoc and not notarized by Apple. Open **System Settings → Privacy & Security** and click **Open Anyway**, or run once:
 
    ```bash
@@ -93,14 +93,15 @@ It builds the universal app (x86_64 + arm64, ad hoc signed) and writes `Workbenc
 
 | Command | What it covers |
 | --- | --- |
-| `swift test` | 111 unit tests for the core: CLI definitions and output parsing, process control, git, budgets, servers, persistence |
+| `swift test` | 117 unit tests for the core: CLI definitions and output parsing, process control, git, budgets, servers, persistence |
 | `zsh scripts/verify_m5.sh` … `verify_m9.sh`, `verify_crud.sh` | The real app store and views, driven with stand-in CLIs and a stand-in ComfyUI server |
 | `zsh scripts/verify_servers.sh` | On-demand GPU servers with a stand-in `ssh`. Add `--real-codex` for a Codex-directed image (calls the model) |
 | `zsh scripts/verify_real_codex.sh` | About 20 real Codex turns covering chat, edits, stop, restart, team plans, reviews and director mode (needs a signed-in Codex and uses its quota) |
 | `python3 -I scripts/verify_cli_flags.py` | Checks every flag in the example CLI definitions against the installed CLIs' help, without calling a model |
 | `zsh scripts/render_theme_preview.sh` | Offscreen renders of the three looks |
+| `zsh scripts/verify_review_fixes.sh` | Regression checks for archived queues, command CLI limits, director resource scope, saved Git evidence and style-dependent icons |
 
-The results of the 1.0 test pass are in [docs/TEST_REPORT_2026-10-24.md](docs/TEST_REPORT_2026-10-24.md) and [docs/VALIDATION.md](docs/VALIDATION.md).
+The 1.0.1 fixes and verification are recorded in [docs/TEST_REPORT_2026-10-24_FIXES.md](docs/TEST_REPORT_2026-10-24_FIXES.md). The results of the original 1.0 test pass are in [docs/TEST_REPORT_2026-10-24.md](docs/TEST_REPORT_2026-10-24.md) and [docs/VALIDATION.md](docs/VALIDATION.md).
 
 ## Project layout
 

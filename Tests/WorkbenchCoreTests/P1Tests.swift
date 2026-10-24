@@ -13,7 +13,7 @@ final class P1Tests: XCTestCase {
     }
 
     func testStatusParsingAndChangedFiles() {
-        let before = GitRepository.parseStatus(" M a.swift\n?? new file.txt\nR  old.txt -> renamed.txt\n")
+        let before = GitRepository.parseStatus(" M a.swift\0?? new file.txt\0R  renamed.txt\0old.txt\0")
         XCTAssertEqual(before, ["a.swift": " M", "new file.txt": "??", "renamed.txt": "R "])
         let after = ["a.swift": " M", "new file.txt": " A", "b.swift": "??"]
         XCTAssertEqual(GitRepository.changedFiles(before: before, after: after), ["b.swift", "new file.txt", "renamed.txt"])

@@ -29,19 +29,22 @@ public struct GitRepository: Sendable {
 
     /// Path → two-letter porcelain status, untracked files included.
     public func status() async -> [String: String]? {
-        let result = await run(["status", "--porcelain=v1", "--untracked-files=all"], timeout: 30)
+        let result = await run(["status", "--porcelain=v1", "-z", "--untracked-files=all"], timeout: 30)
         guard result.status == 0 else { return nil }
         return Self.parseStatus(result.output)
     }
 
     public static func parseStatus(_ text: String) -> [String: String] {
         var entries: [String: String] = [:]
-        for line in text.split(separator: "\n", omittingEmptySubsequences: true) where line.count > 3 {
+        let records = text.split(separator: "\0", omittingEmptySubsequences: true)
+        var index = 0
+        while index < records.count {
+            let line = records[index]; index += 1
+            guard line.count > 3 else { continue }
             let code = String(line.prefix(2))
-            var path = String(line.dropFirst(3))
-            if let arrow = path.range(of: " -> ") { path = String(path[arrow.upperBound...]) }
-            if path.hasPrefix("\""), path.hasSuffix("\""), path.count >= 2 { path = String(path.dropFirst().dropLast()) }
-            entries[path] = code
+            entries[String(line.dropFirst(3))] = code
+            // With -z the destination comes first; the original name is the next NUL record.
+            if code.contains("R") || code.contains("C") { index += 1 }
         }
         return entries
     }
@@ -59,7 +62,12 @@ public struct GitRepository: Sendable {
         let base = URL(fileURLWithPath: directory)
         for file in files {
             let url = base.appendingPathComponent(file)
-            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]), values.isRegularFile == true else { continue }
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]) else { continue }
+            if values.isSymbolicLink == true {
+                result[file] = (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)).map { "link:" + $0 }
+                continue
+            }
+            guard values.isRegularFile == true else { continue }
             if (values.fileSize ?? 0) > 64 * 1024 * 1024 {
                 result[file] = "size:\(values.fileSize ?? 0):\(values.contentModificationDate?.timeIntervalSince1970 ?? 0)"
             } else if let data = try? Data(contentsOf: url, options: .mappedIfSafe) {
@@ -72,9 +80,9 @@ public struct GitRepository: Sendable {
     /// Unified diff for the given files, including untracked ones (shown as new files).
     public func diff(files: [String], against base: String = "HEAD") async -> String {
         guard !files.isEmpty else { return "" }
-        var output = await run(["diff", base, "--"] + files, timeout: 60).output
-        let untracked = await run(["ls-files", "--others", "--exclude-standard", "--"] + files, timeout: 30).output
-        for file in untracked.split(separator: "\n") {
+        var output = await run(["--literal-pathspecs", "diff", base, "--"] + files, timeout: 60).output
+        let untracked = await run(["--literal-pathspecs", "ls-files", "-z", "--others", "--exclude-standard", "--"] + files, timeout: 30).output
+        for file in untracked.split(separator: "\0") {
             output += await run(["diff", "--no-index", "--", "/dev/null", String(file)], timeout: 30).output
         }
         return output.count > 400_000 ? String(output.prefix(400_000)) + "\n…（差异过长，已截断）" : output
@@ -88,9 +96,70 @@ public struct GitRepository: Sendable {
     /// Everything that differs from `base`: committed and uncommitted tracked changes, plus new untracked files.
     public func diffAll(against base: String) async -> String {
         var output = await run(["diff", base], timeout: 60).output
-        let untracked = await run(["ls-files", "--others", "--exclude-standard"], timeout: 30).output
-        for file in untracked.split(separator: "\n") { output += await run(["diff", "--no-index", "--", "/dev/null", String(file)], timeout: 30).output }
+        let untracked = await run(["ls-files", "-z", "--others", "--exclude-standard"], timeout: 30).output
+        for file in untracked.split(separator: "\0") { output += await run(["diff", "--no-index", "--", "/dev/null", String(file)], timeout: 30).output }
         return output.count > 400_000 ? String(output.prefix(400_000)) + "\n…（差异过长，已截断）" : output
+    }
+
+    /// Initial HEAD plus copies of already-dirty files. No staging, commits or refs are changed.
+    public func changeBaseline() async -> GitChangeBaseline? {
+        guard var status = await status() else { return nil }
+        let head = await head(), directory = directory
+        if let head {
+            let paths = await run(["diff", "--no-renames", "--name-only", "-z", head, "--"], timeout: 30)
+            for file in paths.output.split(separator: "\0").map(String.init) where status[file] == nil { status[file] = " D" }
+        }
+        let initialStatus = status
+        return await Task.detached {
+            let copies = FileManager.default.temporaryDirectory.appendingPathComponent("workbench-baseline-\(UUID())")
+            do {
+                try FileManager.default.createDirectory(at: copies, withIntermediateDirectories: true)
+                let content = Self.fingerprints(directory: directory, files: Array(initialStatus.keys))
+                for file in content.keys {
+                    let target = copies.appendingPathComponent(file)
+                    try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try FileManager.default.copyItem(at: URL(fileURLWithPath: directory).appendingPathComponent(file), to: target)
+                }
+                return GitChangeBaseline(head: head, status: initialStatus, content: content, copies: copies)
+            } catch {
+                try? FileManager.default.removeItem(at: copies)
+                return nil
+            }
+        }.value
+    }
+
+    public func changedFiles(since baseline: GitChangeBaseline) async -> [String] {
+        guard let after = await status() else { return [] }
+        var candidates = Set(baseline.status.keys).union(after.keys)
+        if let head = baseline.head {
+            let result = await run(["diff", "--no-renames", "--name-only", "-z", head, "--"], timeout: 30)
+            if result.status == 0 { candidates.formUnion(result.output.split(separator: "\0").map(String.init)) }
+        }
+        let files = Array(candidates), directory = directory
+        let content = await Task.detached { Self.fingerprints(directory: directory, files: files) }.value
+        return candidates.filter { file in
+            if baseline.status[file] != nil { return baseline.content[file] != content[file] }
+            return true
+        }.sorted()
+    }
+
+    /// Compare to the actual starting contents, including edits committed by the CLI and pre-existing user edits.
+    public func diff(files: [String], since baseline: GitChangeBaseline) async -> String {
+        let clean = files.filter { baseline.status[$0] == nil }
+        var output = ""
+        if let head = baseline.head { output = await diff(files: clean, against: head) }
+        for file in files where baseline.status[file] != nil || baseline.head == nil {
+            let old = baseline.content[file] == nil ? "/dev/null" : baseline.copies.appendingPathComponent(file).path
+            let newURL = URL(fileURLWithPath: directory).appendingPathComponent(file)
+            let new = Self.fingerprints(directory: directory, files: [file])[file] == nil ? "/dev/null" : newURL.path
+            guard old != new else { continue }
+            let result = await run(["-c", "core.quotePath=false", "diff", "--no-index", "--no-prefix", "--", old, new], timeout: 30)
+            output += result.output.components(separatedBy: "\n").map { line in
+                guard line.hasPrefix("diff --git ") || line.hasPrefix("--- ") || line.hasPrefix("+++ ") else { return line }
+                return line.replacingOccurrences(of: baseline.copies.path + "/", with: "a/").replacingOccurrences(of: URL(fileURLWithPath: directory).path + "/", with: "b/")
+            }.joined(separator: "\n")
+        }
+        return output
     }
 
     // MARK: Worktrees
@@ -110,6 +179,17 @@ public struct GitRepository: Sendable {
     }
     public func removeWorktree(path: String) async -> Result { await run(["worktree", "remove", "--force", path], timeout: 60) }
     public func deleteBranch(_ branch: String) async -> Result { await run(["branch", "-D", branch], timeout: 30) }
+}
+
+public final class GitChangeBaseline: @unchecked Sendable {
+    public let head: String?
+    public let status: [String: String]
+    public let content: [String: String]
+    fileprivate let copies: URL
+    fileprivate init(head: String?, status: [String: String], content: [String: String], copies: URL) {
+        self.head = head; self.status = status; self.content = content; self.copies = copies
+    }
+    deinit { try? FileManager.default.removeItem(at: copies) }
 }
 
 /// One git worktree created for a team step (TM-08).
