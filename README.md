@@ -2,7 +2,7 @@
 
 **Your one-person AI studio for macOS.** Workbench brings your AI tools into one native Mac app. Bring Codex, Claude Code or any command-line agent, give each one a role, and run code, video, audio and design work from a single studio on your own machine.
 
-[**Download v1.0.1**](https://github.com/haiyangdeng/My-Workbench/releases/download/v1.0.1/Workbench-1.0.1.dmg) · [Homepage](https://haiyangdeng.github.io/My-Workbench/) · [Releases](https://github.com/haiyangdeng/My-Workbench/releases) · [MIT License](LICENSE)
+[**Download v1.0.2**](https://github.com/haiyangdeng/My-Workbench/releases/download/v1.0.2/Workbench-1.0.2.dmg) · [Homepage](https://haiyangdeng.github.io/My-Workbench/) · [Releases](https://github.com/haiyangdeng/My-Workbench/releases) · [MIT License](LICENSE)
 
 ![Workbench home in the Pixel look: four workspace cards for video, audio, code and design](site/assets/screens/home-pixel.jpg)
 
@@ -51,7 +51,7 @@
 
 ## Install
 
-1. Download [Workbench-1.0.1.dmg](https://github.com/haiyangdeng/My-Workbench/releases/download/v1.0.1/Workbench-1.0.1.dmg), open it and drag **Workbench** to **Applications**.
+1. Download [Workbench-1.0.2.dmg](https://github.com/haiyangdeng/My-Workbench/releases/download/v1.0.2/Workbench-1.0.2.dmg), open it and drag **Workbench** to **Applications**.
 2. The first launch is blocked, because this build is signed ad hoc and not notarized by Apple. Open **System Settings → Privacy & Security** and click **Open Anyway**, or run once:
 
    ```bash
@@ -101,7 +101,7 @@ It builds the universal app (x86_64 + arm64, ad hoc signed) and writes `Workbenc
 | `zsh scripts/render_theme_preview.sh` | Offscreen renders of the three looks |
 | `zsh scripts/verify_review_fixes.sh` | Regression checks for archived queues, command CLI limits, director resource scope, saved Git evidence and style-dependent icons |
 
-The 1.0.1 fixes and verification are recorded in [docs/TEST_REPORT_2026-10-24_FIXES.md](docs/TEST_REPORT_2026-10-24_FIXES.md). The results of the original 1.0 test pass are in [docs/TEST_REPORT_2026-10-24.md](docs/TEST_REPORT_2026-10-24.md) and [docs/VALIDATION.md](docs/VALIDATION.md).
+The 1.0.2 fixes and verification are recorded in [docs/TEST_REPORT_2026-10-24_1.0.2.md](docs/TEST_REPORT_2026-10-24_1.0.2.md), and the 1.0.1 fixes in [docs/TEST_REPORT_2026-10-24_FIXES.md](docs/TEST_REPORT_2026-10-24_FIXES.md). The results of the original 1.0 test pass are in [docs/TEST_REPORT_2026-10-24.md](docs/TEST_REPORT_2026-10-24.md) and [docs/VALIDATION.md](docs/VALIDATION.md).
 
 ## Project layout
 
