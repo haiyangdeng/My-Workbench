@@ -27,6 +27,9 @@ public struct CLIOutputSummary: Equatable, Sendable {
     public var activities: [CLIActivity] = []
     public var structuredJSON: Data?
     public var errorMessage: String?
+    /// Errors the CLI reported and then recovered from, such as Codex's "Reconnecting... n/5" before a turn that still
+    /// completed. Kept for the log; they never make a finished turn count as failed.
+    public var recoveredErrors: [String] = []
     /// Tool names the CLI refused because they needed an approval that headless mode could not give.
     public var permissionDenials: [String] = []
     public init() {}
@@ -136,6 +139,8 @@ public final class CLIOutputCollector: @unchecked Sendable {
             default: break
             }
         case "turn.completed":
+            // The turn finished, so errors reported on the way (connection retries) were recovered from.
+            if let earlier = summary.errorMessage { summary.recoveredErrors.append(earlier); summary.errorMessage = nil }
             summary.usage.inputTokens = Self.integer(json["usage"]["input_tokens"]) ?? summary.usage.inputTokens
             summary.usage.outputTokens = Self.integer(json["usage"]["output_tokens"]) ?? summary.usage.outputTokens
         case "turn.failed": summary.errorMessage = json["error"]["message"].string ?? "turn failed"

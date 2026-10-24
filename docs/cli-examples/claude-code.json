@@ -1,0 +1,25 @@
+{
+  "format" : "myworkbench.cli",
+  "version" : 1,
+  "tool" : {
+    "id" : "00000000-0000-0000-0000-000000000000",
+    "name" : "Claude Code",
+    "executable" : "claude",
+    "adapter" : "command",
+    "arguments" : ["-p", "{prompt}", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--session-id", "{session_id}", "--append-system-prompt", "{instructions}"],
+    "resumeArguments" : ["-p", "{prompt}", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--resume", "{session_id}", "--append-system-prompt", "{instructions}"],
+    "interactiveResumeArguments" : ["--resume", "{session_id}"],
+    "outputFormat" : "streamJSON",
+    "includeInstructions" : false,
+    "readOnlyArguments" : ["--permission-mode", "plan"],
+    "editArguments" : ["--permission-mode", "acceptEdits"],
+    "structuredOutputArguments" : ["--json-schema", "{schema}"],
+    "modelArguments" : ["--model", "{model}"],
+    "versionArguments" : ["--version"],
+    "loginStatusArguments" : ["auth", "status"],
+    "loginArguments" : ["auth", "login"],
+    "loggedOutText" : "\"loggedIn\": false",
+    "useLoginShellPath" : true,
+    "timeoutSeconds" : 1800
+  }
+}

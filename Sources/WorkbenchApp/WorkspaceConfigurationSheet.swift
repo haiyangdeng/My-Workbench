@@ -10,10 +10,20 @@ extension Color {
 
 struct StudioPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.studioStyle) private var style
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.system(size: 11, weight: .medium)).padding(.horizontal, 12).padding(.vertical, 8)
+        let pixel = colorScheme == .dark && style.isPixel
+        return configuration.label.font(.system(size: 11, weight: pixel ? .bold : .medium)).padding(.horizontal, 12).padding(.vertical, 8)
             .foregroundStyle(.white.opacity(isEnabled ? 1 : 0.8))
-            .background(Theme.actionFill.opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.35), in: RoundedRectangle(cornerRadius: 8))
+            .background {
+                if pixel {
+                    PixelBlockBackground(fill: Theme.actionFill, radius: 8).opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.35)
+                } else {
+                    RoundedRectangle(cornerRadius: 8).fill(Theme.actionFill.opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.35))
+                }
+            }
+            .pointerCursor(isEnabled)
     }
 }
 
@@ -39,7 +49,7 @@ struct WorkspaceConfigurationSheet: View {
                     Text(areaToEdit == nil ? "添加工作区，再为它安排员工和任务。" : "名称和外观可以调整，员工与任务关联会保留。").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button { dismiss() } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("关闭工作区配置")
+                Button { dismiss() } label: { Image(systemName: "xmark") }.buttonStyle(.plainPointer).accessibilityLabel("关闭工作区配置")
             }
             Divider()
             HStack(alignment: .top, spacing: 30) {
@@ -50,13 +60,13 @@ struct WorkspaceConfigurationSheet: View {
                         field("图标") {
                             LazyVGrid(columns: Array(repeating: GridItem(.fixed(43), spacing: 8), count: 6), spacing: 8) {
                                 ForEach(icons, id: \.self) { value in
-                                    Button { icon = value } label: { Image(systemName: value).frame(width: 43, height: 39).background(Color(hex: color).opacity(icon == value ? 0.18 : 0.04), in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(hex: color).opacity(icon == value ? 0.8 : 0.12))) }.buttonStyle(.plain).accessibilityLabel("图标 " + value).accessibilityValue(icon == value ? "已选择" : "未选择")
+                                    Button { icon = value } label: { Image(systemName: value).frame(width: 43, height: 39).background(Color(hex: color).opacity(icon == value ? 0.18 : 0.04), in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(hex: color).opacity(icon == value ? 0.8 : 0.12))) }.buttonStyle(.plainPointer).accessibilityLabel("图标 " + value).accessibilityValue(icon == value ? "已选择" : "未选择")
                                 }
                             }
                         }
                         field("工作区主题色") {
                             HStack(spacing: 12) { ForEach(colors, id: \.self) { value in
-                                Button { color = value } label: { Circle().fill(Color(hex: value)).frame(width: 31, height: 31).overlay { if color == value { Image(systemName: "checkmark").foregroundStyle(.white).font(.system(size: 11, weight: .bold)) } } }.buttonStyle(.plain).accessibilityLabel("颜色 " + value)
+                                Button { color = value } label: { Circle().fill(Color(hex: value)).frame(width: 31, height: 31).overlay { if color == value { Image(systemName: "checkmark").foregroundStyle(.white).font(.system(size: 11, weight: .bold)) } } }.buttonStyle(.plainPointer).accessibilityLabel("颜色 " + value)
                             } }
                             TextField("六位颜色值", text: $color).textFieldStyle(.roundedBorder).frame(width: 150).font(.system(size: 11, design: .monospaced))
                         }

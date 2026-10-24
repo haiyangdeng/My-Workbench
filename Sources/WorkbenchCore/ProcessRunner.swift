@@ -40,7 +40,7 @@ struct UTF8StreamDecoder {
 
 // Each launch owns a fresh POSIX process group. Signals never target the app's group.
 public final class ProcessRunner: @unchecked Sendable {
-    private struct Active { var pid: pid_t; var cancelled = false; var timedOut = false }
+    private struct Active { var pid: pid_t; var cancelled = false; var timedOut = false; var tree: Set<ProcessTree.Entry> = [] }
     private let lock = NSLock()
     private var processes: [UUID: Active] = [:]
     private var preCancelled: Set<UUID> = []
@@ -49,24 +49,36 @@ public final class ProcessRunner: @unchecked Sendable {
     public func cancel(id: UUID) {
         lock.lock()
         guard var active = processes[id] else { preCancelled.insert(id); lock.unlock(); return }
-        active.cancelled = true; processes[id] = active
-        kill(-active.pid, SIGTERM)
+        active.cancelled = true
+        active.tree.formUnion(ProcessTree.descendants(of: active.pid)); processes[id] = active
+        kill(-active.pid, SIGTERM); ProcessTree.signal(active.tree, SIGTERM)
         lock.unlock()
-        escalate(id: id, pid: active.pid)
+        escalate(id: id, pid: active.pid, tree: active.tree)
     }
     private func timeout(id: UUID) {
         lock.lock()
         guard var active = processes[id], !active.cancelled else { lock.unlock(); return }
-        active.timedOut = true; processes[id] = active
-        kill(-active.pid, SIGTERM)
+        active.timedOut = true
+        active.tree.formUnion(ProcessTree.descendants(of: active.pid)); processes[id] = active
+        kill(-active.pid, SIGTERM); ProcessTree.signal(active.tree, SIGTERM)
         lock.unlock()
-        escalate(id: id, pid: active.pid)
+        escalate(id: id, pid: active.pid, tree: active.tree)
     }
-    private func escalate(id: UUID, pid: pid_t) {
+    /// One second after SIGTERM, SIGKILL whatever is left: the CLI's group and every process recorded under it.
+    private func escalate(id: UUID, pid: pid_t, tree: Set<ProcessTree.Entry>) {
         DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
-            self.lock.lock(); defer { self.lock.unlock() }
+            self.lock.lock()
             if self.processes[id]?.pid == pid { kill(-pid, SIGKILL) }
+            self.lock.unlock()
+            ProcessTree.signal(tree, SIGKILL)
         }
+    }
+    /// Records the processes under a running CLI, so they can be stopped after they leave its process group or lose
+    /// their parent (see ProcessTree).
+    private func track(id: UUID) {
+        lock.lock(); defer { lock.unlock() }
+        guard var active = processes[id] else { return }
+        active.tree.formUnion(ProcessTree.descendants(of: active.pid)); processes[id] = active
     }
 
     public func run(id: UUID, tool: ToolConfig, input: String, directory: String,
@@ -131,6 +143,10 @@ public final class ProcessRunner: @unchecked Sendable {
         close(stdout[1]); close(stderr[1]); parentWriteOpen = false
         let timer = DispatchWorkItem { self.timeout(id: id) }
         DispatchQueue.global().asyncAfter(deadline: .now() + tool.timeout, execute: timer)
+        let tracker = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        tracker.schedule(deadline: .now() + 0.5, repeating: 1)
+        tracker.setEventHandler { self.track(id: id) }
+        tracker.resume()
         let readers = DispatchGroup()
         for (handle, stream) in [(outHandle, LogChunk.Stream.stdout), (errHandle, .stderr)] {
             readers.enter()
@@ -149,8 +165,10 @@ public final class ProcessRunner: @unchecked Sendable {
         }
         var waitStatus: Int32 = 0
         while waitpid(pid, &waitStatus, 0) == -1 && errno == EINTR {}
-        // A CLI may exit while a child still holds a pipe. Finish owned descendants too.
-        kill(-pid, SIGTERM); escalate(id: id, pid: pid)
+        tracker.cancel()
+        // A CLI may exit while a child still holds a pipe. Finish owned descendants too, including those in other groups.
+        lock.lock(); let tree = processes[id]?.tree ?? []; lock.unlock()
+        kill(-pid, SIGTERM); ProcessTree.signal(tree, SIGTERM); escalate(id: id, pid: pid, tree: tree)
         readers.wait(); timer.cancel()
         kill(-pid, SIGKILL)
         lock.lock(); let active = processes.removeValue(forKey: id); lock.unlock()

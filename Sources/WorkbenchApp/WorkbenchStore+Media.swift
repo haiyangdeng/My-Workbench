@@ -16,21 +16,30 @@ extension WorkbenchStore {
 
     // MARK: Servers and templates
 
-    @discardableResult func saveServer(_ server: ComfyServer, token: String?) -> Bool {
+    @discardableResult func saveServer(_ server: ComfyServer, token: String?, sshPassword: String? = nil) -> Bool {
         let name = server.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !server.isDeleted, snapshot.servers.first(where: { $0.id == server.id })?.isDeleted != true, !name.isEmpty else { errorMessage = "服务器已删除，或名称为空。"; return false }
         do {
             _ = try ComfyClient(connection: server.connection())
-            if let ssh = server.ssh { _ = try ssh.arguments() }
+            if let ssh = server.ssh { try ssh.validate() }
+            for command in [server.startCommand, server.stopCommand].compactMap({ $0 }) where command.isEmpty || command.contains(where: { $0.contains("\0") }) { throw RemoteError.invalidConfiguration }
+            if let wait = server.startupWaitSeconds, !(wait.isFinite && (10...3600).contains(wait)) { throw RemoteError.invalidConfiguration }
             guard server.jobLimit >= 1, server.jobLimit <= 8, server.maximumUploadBytes > 0, (server.hourlyPrice ?? 0) >= 0 else { throw RemoteError.invalidConfiguration }
             if let token, !token.isEmpty { try CredentialVault().save(token, toolID: server.id) }
             if server.requiresToken, (try CredentialVault().read(toolID: server.id))?.isEmpty ?? true { errorMessage = "这台服务器需要 API 凭证，请填写。"; return false }
+            if let sshPassword, !sshPassword.isEmpty { try Self.sshPasswordVault.save(sshPassword, toolID: server.id) }
+            if server.ssh?.usesPassword == true, (try Self.sshPasswordVault.read(toolID: server.id))?.isEmpty ?? true { errorMessage = "选择了密码登录，请填写 SSH 密码。"; return false }
         } catch { errorMessage = error.localizedDescription; return false }
         var saved = server; saved.name = name
+        let previousSSH = snapshot.servers.first { $0.id == server.id }?.ssh
         let changed = change { snapshot in
             if let index = snapshot.servers.firstIndex(where: { $0.id == saved.id }) { snapshot.servers[index] = saved } else { snapshot.servers.append(saved) }
         }
-        if changed { serverHealth.removeValue(forKey: server.id) }
+        if changed {
+            serverHealth.removeValue(forKey: server.id)
+            // A changed SSH setting takes effect on the next connect.
+            if let old = previousSSH, old != saved.ssh { disconnectTunnel(server.id) }
+        }
         return changed
     }
 
@@ -57,6 +66,7 @@ extension WorkbenchStore {
         probingTools.insert(id)
         Task {
             defer { probingTools.remove(id) }
+            if server.ssh != nil, let problem = await openTunnel(id) { serverHealth[id] = ServerHealth(error: problem); return }
             do { serverHealth[id] = try await serverClient(server).health() }
             catch { serverHealth[id] = ServerHealth(error: error.localizedDescription) }
         }
@@ -135,27 +145,60 @@ extension WorkbenchStore {
         guard let planID = task.planID, let plan = snapshot.plans.first(where: { $0.id == planID }) else { return true }
         let single = estimate(templateID: spec.templateID, serverID: spec.serverID)
         let seconds = single.seconds.map { $0 * Double(spec.variants) }, cost = single.cost.map { $0 * Double(spec.variants) }
-        // Jobs of this plan that are still running count with their estimates.
-        let running = plan.taskIDs.filter { activeRuns[$0] != nil }.compactMap { id in snapshot.tasks.first { $0.id == id }?.generation }.map { estimate(templateID: $0.templateID, serverID: $0.serverID) }
-        let spentSeconds = (plan.spentSeconds ?? 0) + running.compactMap(\.seconds).reduce(0, +)
-        let spentCost = (plan.spentCost ?? 0) + running.compactMap(\.cost).reduce(0, +)
-        var reason: String?
-        if let minutes = plan.budgetMinutes, (spentSeconds + (seconds ?? 0)) / 60 > minutes || spentSeconds / 60 >= minutes {
-            reason = String(format: "GPU 时间预算 %.0f 分钟：已用和运行中约 %.1f 分钟，下一个任务预计 %@。", minutes, spentSeconds / 60, seconds.map { String(format: "%.1f 分钟", $0 / 60) } ?? "未知")
-        } else if let budget = plan.budgetCost, spentCost + (cost ?? 0) > budget || spentCost >= budget {
-            reason = String(format: "费用预算 %.2f：已用约 %.2f，下一个任务预计 %@。", budget, spentCost, cost.map { String(format: "%.2f", $0) } ?? "未知")
-        }
-        guard let reason else { return true }
-        change { snapshot in
-            if let p = snapshot.plans.firstIndex(where: { $0.id == planID }) { snapshot.plans[p].paused = true; snapshot.plans[p].pauseReason = "已暂停：" + reason + "不再提交新任务，正在运行的任务不受影响。调整预算后可以继续。" }
-        }
+        let committed = committedSpend(plan, excluding: nil)
+        guard let reason = budgetOverrun(plan, committedSeconds: committed.seconds, committedCost: committed.cost, nextSeconds: seconds, nextCost: cost, next: "下一个任务") else { return true }
+        pauseForBudget(planID, reason: reason)
         return false
     }
 
-    func updateBudget(_ planID: UUID, minutes: Double?, cost: Double?) {
-        guard let index = snapshot.plans.firstIndex(where: { $0.id == planID }) else { return }
+    /// What the plan has spent, plus every running job of the plan reserved at its full variant count (MD-13, MD-18).
+    private func committedSpend(_ plan: CollaborationPlan, excluding taskID: UUID?) -> (seconds: Double, cost: Double) {
+        let running = plan.taskIDs.filter { $0 != taskID && activeRuns[$0] != nil }.compactMap { id in snapshot.tasks.first { $0.id == id }?.generation }
+            .map { spec -> (Double?, Double?) in
+                let one = estimate(templateID: spec.templateID, serverID: spec.serverID)
+                return (one.seconds.map { $0 * Double(spec.variants) }, one.cost.map { $0 * Double(spec.variants) })
+            }
+        return ((plan.spentSeconds ?? 0) + running.compactMap(\.0).reduce(0, +), (plan.spentCost ?? 0) + running.compactMap(\.1).reduce(0, +))
+    }
+
+    private func budgetOverrun(_ plan: CollaborationPlan, committedSeconds: Double, committedCost: Double, nextSeconds: Double?, nextCost: Double?, next: String) -> String? {
+        if let minutes = plan.budgetMinutes, (committedSeconds + (nextSeconds ?? 0)) / 60 > minutes || committedSeconds / 60 >= minutes {
+            return String(format: "GPU 时间预算 %.0f 分钟：已用和运行中约 %.1f 分钟，%@预计 %@。", minutes, committedSeconds / 60, next, nextSeconds.map { String(format: "%.1f 分钟", $0 / 60) } ?? "未知")
+        }
+        if let budget = plan.budgetCost, committedCost + (nextCost ?? 0) > budget || committedCost >= budget {
+            return String(format: "费用预算 %.2f：已用约 %.2f，%@预计 %@。", budget, committedCost, next, nextCost.map { String(format: "%.2f", $0) } ?? "未知")
+        }
+        return nil
+    }
+
+    private func pauseForBudget(_ planID: UUID, reason: String) {
         change { snapshot in
-            snapshot.plans[index].budgetMinutes = minutes.flatMap { $0 > 0 ? $0 : nil }; snapshot.plans[index].budgetCost = cost.flatMap { $0 > 0 ? $0 : nil }
+            if let p = snapshot.plans.firstIndex(where: { $0.id == planID }) { snapshot.plans[p].paused = true; snapshot.plans[p].pauseReason = "已暂停：" + reason + "不再提交新任务，正在运行的任务不受影响。调整预算后可以继续。" }
+        }
+    }
+
+    /// MD-18 inside one job: before another variant goes to the server, the plan must still have room for it, counting
+    /// the time this job has already used. Returns the reason to stop, or nil.
+    func budgetBlocksNextVariant(of taskID: UUID, elapsed: TimeInterval) -> String? {
+        guard let task = snapshot.tasks.first(where: { $0.id == taskID }), let spec = task.generation, let planID = task.planID,
+              let plan = snapshot.plans.first(where: { $0.id == planID }) else { return nil }
+        let single = estimate(templateID: spec.templateID, serverID: spec.serverID)
+        let others = committedSpend(plan, excluding: taskID)
+        let elapsedCost = (snapshot.server(spec.serverID)?.hourlyPrice).map { elapsed / 3600 * $0 } ?? 0
+        return budgetOverrun(plan, committedSeconds: others.seconds + elapsed, committedCost: others.cost + elapsedCost, nextSeconds: single.seconds, nextCost: single.cost, next: "下一个变体")
+    }
+
+    func planHasGenerateSteps(_ planID: UUID) -> Bool {
+        guard let plan = snapshot.plans.first(where: { $0.id == planID }) else { return false }
+        return snapshot.tasks.contains { plan.taskIDs.contains($0.id) && $0.generation != nil }
+    }
+
+    @discardableResult func updateBudget(_ planID: UUID, minutes: Double?, cost: Double?) -> Bool {
+        guard let index = snapshot.plans.firstIndex(where: { $0.id == planID }) else { return false }
+        do { try BudgetCap.validate(minutes: minutes, cost: cost, hasGenerateSteps: planHasGenerateSteps(planID)) }
+        catch { errorMessage = error.localizedDescription; return false }
+        return change { snapshot in
+            snapshot.plans[index].budgetMinutes = minutes; snapshot.plans[index].budgetCost = cost
             snapshot.plans[index].pauseReason = nil
         }
     }
@@ -211,7 +254,10 @@ extension WorkbenchStore {
                     while !Task.isCancelled { try? await Task.sleep(nanoseconds: 300_000_000); guard !Task.isCancelled else { break }; self?.appendTaskLog(log.drain(), to: id) }
                 }
                 var status: WorkStatus = .failed
+                monitorHealth(server.id)
                 do {
+                    // An on-demand server's tunnel opens on its own before the job; if the server is off, nothing is submitted.
+                    if server.ssh != nil, let problem = await openTunnel(server.id) { throw MediaError.serverUnavailable(problem + " 服务器可能还没启动：在“工具连接”的服务器卡片上点“启动”，就绪后重试这一步。") }
                     let client = try serverClient(server)
                     var values = spec.values
                     for (name, source) in spec.inputs.sorted(by: { $0.key < $1.key }) {
@@ -233,6 +279,11 @@ extension WorkbenchStore {
                     var collected: [RemoteArtifact] = []
                     status = .review
                     for variant in 0..<count {
+                        if variant > 0, let reason = budgetBlocksNextVariant(of: id, elapsed: Date().timeIntervalSince(run.startedAt)) {
+                            log.append("[system] 停止提交其余 \(count - variant) 个变体：\(reason)\n")
+                            if let planID = task.planID { pauseForBudget(planID, reason: reason) }
+                            break
+                        }
                         var variantValues = values
                         if count > 1, let seedName {
                             if case .number(let base)? = values[seedName] { variantValues[seedName] = .number(base + Double(variant)) } else { variantValues[seedName] = .string("random") }

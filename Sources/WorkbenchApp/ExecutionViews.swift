@@ -29,20 +29,20 @@ struct ArtifactList: View {
                     Text(([filter == nil ? nil : store.project(artifact.projectID)?.name ?? "未归属项目", ByteCountFormatter.string(fromByteCount: artifact.byteCount, countStyle: .file), artifact.fileType.uppercased(), artifact.accepted ? "已验收" : "待检查"] as [String?]).compactMap { $0 }.joined(separator: " · ")).font(.system(size: 10)).foregroundStyle(.secondary)
                     if let lineage = lineage(artifact) { Text(lineage).font(.system(size: 10)).foregroundStyle(.secondary).textSelection(.enabled) }
                     HStack {
-                        Button("预览") { preview = preview == artifact.id ? nil : artifact.id }.buttonStyle(.link)
+                        Button("预览") { preview = preview == artifact.id ? nil : artifact.id }.buttonStyle(.linkPointer)
                         if MediaKind.of(fileExtension: artifact.fileType) == .image {
                             Button(compare.contains(artifact.id) ? "取消对比" : "加入对比") {
                                 if let index = compare.firstIndex(of: artifact.id) { compare.remove(at: index) } else { compare = Array((compare + [artifact.id]).suffix(2)) }
-                            }.buttonStyle(.link)
+                            }.buttonStyle(.linkPointer)
                         }
-                        Button("Finder") { perform { NSWorkspace.shared.activateFileViewerSelecting([try store.archive.url(for: artifact)]) } }.buttonStyle(.link)
-                        Button("重命名") { newName = artifact.name; renaming = artifact }.buttonStyle(.link)
-                        Button("删除", role: .destructive) { store.pendingDeletion = DeletionTarget(.artifact, artifact.id) }.buttonStyle(.link)
+                        Button("Finder") { perform { NSWorkspace.shared.activateFileViewerSelecting([try store.archive.url(for: artifact)]) } }.buttonStyle(.linkPointer)
+                        Button("重命名") { newName = artifact.name; renaming = artifact }.buttonStyle(.linkPointer)
+                        Button("删除", role: .destructive) { store.pendingDeletion = DeletionTarget(.artifact, artifact.id) }.buttonStyle(.linkPointer)
                         if !artifact.accepted, store.snapshot.runs.first(where: { $0.id == artifact.runID })?.status == .completed {
-                            Button("已检查") { store.acceptArtifact(artifact.id) }.buttonStyle(.link)
+                            Button("已检查") { store.acceptArtifact(artifact.id) }.buttonStyle(.linkPointer)
                         }
                         if let task = store.snapshot.tasks.first(where: { $0.id == artifact.taskID }), task.status == .review, (task.generation?.variants ?? 1) > 1 {
-                            Button(artifact.accepted ? "取消选用" : "选用此变体") { store.selectVariant(artifact.id, selected: !artifact.accepted) }.buttonStyle(.link)
+                            Button(artifact.accepted ? "取消选用" : "选用此变体") { store.selectVariant(artifact.id, selected: !artifact.accepted) }.buttonStyle(.linkPointer)
                         }
                     }.font(.system(size: 10))
                     if preview == artifact.id { ArtifactPreview(artifact: artifact, archive: store.archive) }
@@ -83,7 +83,7 @@ private struct ArtifactPreview: View {
             } else if ["txt", "md", "json", "csv", "swift", "py", "html", "log"].contains(artifact.fileType) {
                 ReadOnlyTextView(text: readText(url), pointSize: 10, accessibilityName: "产物文本预览").frame(height: 150)
             } else {
-                Button("使用系统应用预览") { NSWorkspace.shared.open(url) }.buttonStyle(.bordered)
+                Button("使用系统应用预览") { NSWorkspace.shared.open(url) }.buttonStyle(.borderedPointer)
             }
         } else { Text("文件已移动或不可访问。").font(.system(size: 10)).foregroundStyle(.red) }
     }
@@ -134,7 +134,7 @@ struct HandoffConfigurationSheet: View {
                 TextField("验收标准", text: $acceptance, axis: .vertical).lineLimit(2...4)
             }.formStyle(.grouped)
             Text("确认后创建下游草稿，执行由你发起。").font(.system(size: 11)).foregroundStyle(.secondary)
-            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button("确认交接") { confirm() }.buttonStyle(.borderedProminent).disabled(target == nil || goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || acceptance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button("确认交接") { confirm() }.buttonStyle(.borderedProminentPointer).disabled(target == nil || goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || acceptance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
         }.padding(30).frame(width: 610, height: 680)
         .onAppear { target = store.snapshot.employees.current.first(where: { $0.id != task.employeeID && ($0.enabled ?? true) })?.id ?? task.employeeID; selectedArtifacts = Set(store.artifacts(for: run.id).filter(\.accepted).map(\.id)); checks = task.acceptance }
     }
@@ -189,7 +189,7 @@ struct RemoteToolConfigurationSheet: View {
             }.formStyle(.grouped)
             Text("支持提供按编号取消接口的 ComfyUI 服务。预算说明用于执行前核对，费用上限由服务自身设置。").font(.system(size: 10)).foregroundStyle(.secondary)
             if let issue { Text(issue).font(.system(size: 11)).foregroundStyle(.red) }
-            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button("保存配置") { save() }.buttonStyle(.borderedProminent).disabled(workflow.isEmpty || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.storageAvailable) }
+            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button("保存配置") { save() }.buttonStyle(.borderedProminentPointer).disabled(workflow.isEmpty || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.storageAvailable) }
         }.padding(30).frame(width: 640, height: 690)
         .onAppear {
             if let tool = toolToEdit, let remote = tool.remote {

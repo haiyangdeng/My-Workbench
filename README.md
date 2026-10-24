@@ -1,67 +1,120 @@
 # Workbench
 
-macOS原生个人AI管理工作站，以可配置工作区和项目组织员工、任务、产物及协作。0.5.0（构建8）按2026年10月6日确认的参考图实现侧导航、浅蓝视觉横幅、四色插画工作区和底部想法输入栏。当前源码按 [PRD v0.6](docs/PRD_V06.md) 实现了 M5–M9（CLI 手动接入、对话与团队、ComfyUI 制作与导演、分类管理等）：94 项自动测试、四组端到端检查、Debug 与 Universal Release 构建通过；已生成改名后的本地候选包，版本号仍为 0.5.0；本轮检查发现四项可复现问题与两项需求缺口，见 [检查报告](docs/REVIEW_2026-10-18.md)。当前工程覆盖本地执行、远程接入接口与M4协作功能；可交付范围以验证记录为准。
+**Your one-person AI studio for macOS.** Workbench brings your AI tools into one native Mac app. Bring Codex, Claude Code or any command-line agent, give each one a role, and run code, video, audio and design work from a single studio on your own machine.
 
-## 产品与设计
+[**Download v1.0.0**](https://github.com/haiyangdeng/My-Workbench/releases/download/v1.0.0/Workbench-1.0.0.dmg) · [Homepage](https://haiyangdeng.github.io/My-Workbench/) · [Releases](https://github.com/haiyangdeng/My-Workbench/releases) · [MIT License](LICENSE)
 
-- [Product Requirements v0.6 (English, current)](docs/PRD_V06.md)
-- [产品需求 v0.3](docs/PRD.md)
-- [Word版PRD](docs/AI员工工作台_PRD_v0.3.docx)
-- [开发方案](docs/DEVELOPMENT.md)
-- [设计规范](docs/DESIGN.md)
-- [V05界面设计与交互](docs/DESIGN_V05.md)
-- [已确认V04设计](docs/DESIGN_REVIEW_V04.md)
-- [V04需求补充](docs/PRD_V04_ADDENDUM.md)
-- [验证记录](docs/VALIDATION.md)
-- [PRD 检查与改名记录](docs/REVIEW_2026-10-18.md)
-- [使用与交付说明](docs/DELIVERY.md)
+![Workbench home in the Pixel look: four workspace cards for video, audio, code and design](site/assets/screens/home-pixel.jpg)
 
-## 本机启动
+## Features
 
-用Xcode打开MyWorkbench.xcodeproj，选择MyWorkbench scheme运行。构建也可以执行：
+**AI employees, on the CLIs you already use.**
+
+- Nothing is built in. You add any command-line agent by hand: its executable, argument templates, output format (plain text, Claude Code's stream-json or Codex's JSONL), access flags, login check, environment variables and proxy.
+- Each “AI employee” uses one CLI and has a role, instructions, a default model and a maximum access level (Read-only or Edit in project).
+- [Example definitions](docs/cli-examples/README.md) for Claude Code and Codex are ready to import.
+
+**Chat inside projects.**
+
+- Replies stream in, tool activity is listed, and every turn continues the agent's own session.
+- You can queue, stop or retry any turn, or continue the same session in the built-in terminal.
+- Edit turns in a git project list the changed files with a diff.
+- Signed-out CLIs and usage limits are explained in plain language.
+
+**Team mode.**
+
+- Pick two or more agents. The lead splits the work into a plan, which you edit and approve; nothing runs before that.
+- Steps run in dependency order, one writer per folder, optionally in their own git worktrees.
+- A reviewer agent checks each step against its acceptance criteria, with the diff as evidence. Parallel mode asks several agents the same question side by side, read-only.
+
+**Media studio.**
+
+- **Servers:** connect ComfyUI on your own GPU, local or rented. SSH by key or by a password kept in the Keychain, start and stop commands, a step-by-step connection test, and tunnels that open and reconnect on their own ([guide](docs/GPU_SERVERS.md)).
+- **Templates:** import API-format workflows and choose which inputs can be changed.
+- **Director mode:** a director agent turns a brief into a production plan with estimates and a budget cap, then reviews the results.
+- **Results:** compare images, scrub through videos and play audio with a waveform.
+
+**Projects and categories.** All projects are grouped by category, with filters by category, workspace and status. A cross-project asset library, a knowledge base, and ⌘K search over everything.
+
+**Three looks.** Ink (the default dark look), Pixel (arcade night, shown above) and Paper (light).
+
+**Local-first.**
+
+- No account and no telemetry.
+- Projects, conversations and runs are stored in a local SQLite database.
+- Tokens, SSH passwords and secret variables go to the macOS Keychain.
+- Each CLI runs with its own sign-in on your Mac.
+
+| Team plan | Director's production plan |
+| --- | --- |
+| ![A lead agent's three-step plan waiting for approval](site/assets/screens/team-plan.jpg) | ![A director's plan with keyframe and animation jobs on a rented GPU](site/assets/screens/director-plan.jpg) |
+
+## Install
+
+1. Download [Workbench-1.0.0.dmg](https://github.com/haiyangdeng/My-Workbench/releases/download/v1.0.0/Workbench-1.0.0.dmg), open it and drag **Workbench** to **Applications**.
+2. The first launch is blocked, because this build is signed ad hoc and not notarized by Apple. Open **System Settings → Privacy & Security** and click **Open Anyway**, or run once:
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/Workbench.app
+   ```
+
+3. In **工具连接**, add the CLI you use (for example Codex or Claude Code) and check its login. Then add an AI employee and start a conversation from the input bar.
+
+**Requirements**
+
+- macOS 14 Sonoma or later, on Apple Silicon or Intel (the app is universal).
+- At least one CLI agent you can sign in to.
+- ComfyUI is optional, for the media workspaces.
+- The interface is in Simplified Chinese.
+
+Your data is stored in `~/Library/Application Support/MyWorkbench/`: `workspace.sqlite` holds the workspace, and `Archives/` holds logs and outputs. Upgrades back up the database first.
+
+## Build from source
+
+You need Xcode 26 with the macOS 26 SDK. SwiftPM fetches the one dependency, [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm), on the first build.
 
 ```bash
 zsh scripts/build.sh
 ```
 
-应用位于.build/xcode/Build/Products/Debug/Workbench.app。脚本识别本机已有Xcode 26.2，也支持DEVELOPER_DIR指定其他安装。核心不需要额外数据库服务或本地模型。
+The script runs the unit tests and builds `.build/xcode/Build/Products/Debug/Workbench.app`. You can also open `MyWorkbench.xcodeproj` and run the **MyWorkbench** scheme. Set `DEVELOPER_DIR` if Xcode is not in `/Applications`.
 
-默认使用“夜幕 · 深色”，不跟随系统外观；侧栏“设置”或右上角个人头像可改为“云蓝 · 浅色”。侧栏“管理工作区”和首页底部“添加工作区”支持配置名称、图标、主题色和用途。
+The Xcode project is generated. After adding Swift files, run `python3 scripts/create_xcode_project.py`.
 
-工作台不内置任何 CLI。在侧栏“工具连接”手动添加 CLI（可执行文件、参数模板、输出格式、权限参数、登录检测，示例见 [PRD v0.6 附录 A](docs/PRD_V06.md)）或 ComfyUI 服务；尚未添加 CLI 时，首页、输入栏和员工表单会提示“添加 CLI”，并保留已输入的内容。每位员工绑定一个 CLI，设置最高权限（只读或可编辑项目）和可选模型；一个工作区可以有多位员工，员工也可以出现在多个工作区。首页卡片与“AI 员工”目录均可打开员工详情，任务详情在当前页面右侧展开。
+To build the installer:
 
-底部输入栏是对话框：点 @ 选择一位或几位 AI 员工，选择权限（只读或可编辑项目），写下要做的事后按 Return 发送（Shift+Return 换行）。一位员工时直接回复，回复实时显示；后续消息续接同一个 CLI 会话，也可以“在终端继续”。几位员工时可选“并行”（各自只读回复，便于比较）或“团队”（第一位是负责人，先拆解计划，你确认后才分工执行；同一文件夹同时只有一个可编辑步骤）。回复可以停止、重新发送、以新会话重试或转为任务。附件按钮只传文件路径，不上传文件。快捷菜单里的“把输入做成任务”仍会打开新任务表单。
+```bash
+zsh scripts/make_dmg.sh
+```
 
-“项目”按分类整理所有项目：可新建、改名、排序和删除分类（删除后项目移到“未分类”），按分类、工作区、状态和关键字筛选，拖拽或用菜单移动项目，归档后只能查看。进入项目后管理任务和草稿。“素材库”可按分类、项目和工作区跨项目筛选产物；“工作流”查看计划与员工交接。“知识库”聚合现有项目目标、员工职责和已验收任务，来源内容可查看，未新增RAG检索或自动知识注入。
+It builds the universal app (x86_64 + arm64, ad hoc signed) and writes `Workbench-<version>.dmg`, a zip of the app and SHA-256 checksums to `releases/`.
 
-本地任务支持有限并发、排队、超时、停止所属进程组、完整日志与独立run、产物导入、预览和返工。验收后可确认交接，生成下游草稿。“项目任务”添加项目后，已绑定Codex的员工可以生成协作计划；审阅步骤与依赖后启动，可选择人工或AI审核和有限返工。
+## Tests and checks
 
-独立草稿可确认移出并在项目内恢复，原编号与输入保留。0.3.1修复长日志布局卡顿，历史检查记录见验证文档；0.5.0的原生渲染、交互和构建结果以本轮最终验证为准。
+| Command | What it covers |
+| --- | --- |
+| `swift test` | 111 unit tests for the core: CLI definitions and output parsing, process control, git, budgets, servers, persistence |
+| `zsh scripts/verify_m5.sh` … `verify_m9.sh`, `verify_crud.sh` | The real app store and views, driven with stand-in CLIs and a stand-in ComfyUI server |
+| `zsh scripts/verify_servers.sh` | On-demand GPU servers with a stand-in `ssh`. Add `--real-codex` for a Codex-directed image (calls the model) |
+| `zsh scripts/verify_real_codex.sh` | About 20 real Codex turns covering chat, edits, stop, restart, team plans, reviews and director mode (needs a signed-in Codex and uses its quota) |
+| `python3 -I scripts/verify_cli_flags.py` | Checks every flag in the example CLI definitions against the installed CLIs' help, without calling a model |
+| `zsh scripts/render_theme_preview.sh` | Offscreen renders of the three looks |
 
-## 工具接入
+The results of the 1.0 test pass are in [docs/TEST_REPORT_2026-10-24.md](docs/TEST_REPORT_2026-10-24.md) and [docs/VALIDATION.md](docs/VALIDATION.md).
 
-CLI 使用绝对路径和每行一项的 argv 模板，不经过 shell。占位符 {prompt}（兼容 {input}）、{session_id}、{output}、{workdir}、{model}、{instructions}、{schema}、{schema_file} 各替换为一个参数；单独一行 {flags} 放置权限、模型和结构化输出参数。输出格式可选纯文本、stream-json 事件（Claude Code 格式）或 JSONL 事件（Codex 格式），工作台据此读取回复、会话编号和用量，并把回复保存为 result.md。勾选“使用登录 Shell 的 PATH”后，从访达打开的应用也能运行依赖 node 等命令的 CLI。产物目录也通过 MYWORKBENCH_OUTPUT_DIR 传入。工作目录不是操作系统沙箱，AI CLI 保留自身权限控制；权限参数中含已知的跳过审批选项时会提示。
+## Project layout
 
-Claude Code、Codex 等都按普通 CLI 手动添加。规划和审核可以使用任何配置了只读权限（或不由工作台管理权限）的 CLI，结构化结果使用该 CLI 的结构化输出参数，没有时在提示中要求 JSON，结果自动归档。旧版本中内置的 Codex 配置在升级时转换为等价的 CLI 定义。
+| Path | Contents |
+| --- | --- |
+| `Sources/WorkbenchCore` | Models, persistence (SQLite), the CLI runner and output parsers, git, the ComfyUI client, SSH settings |
+| `Sources/WorkbenchApp` | The SwiftUI app: store, views, styles, terminal |
+| `Tests/WorkbenchCoreTests` | Unit tests |
+| `scripts` | Build, packaging, verification and render scripts, plus fixtures (stand-in CLIs, ComfyUI and ssh) |
+| `docs` | [PRD v0.6](docs/PRD_V06.md), [GPU servers](docs/GPU_SERVERS.md), [CLI examples](docs/cli-examples/README.md), [design notes](docs/design), test reports |
+| `site` | The [homepage](https://haiyangdeng.github.io/My-Workbench/), published with GitHub Pages |
 
-影像、声音和视觉工作使用 ComfyUI：在“工具连接”添加制作服务器（地址或 SSH 隧道、可选的钥匙串凭证、每小时价格、同时运行数）并“检测”（版本、GPU、显存、队列、是否支持按编号取消单个任务），再导入 API 格式的工作流模板，把要调整的节点输入开放为参数（文本、整数、种子、选项、图片/音频/视频文件等）并标出输出节点。模板可以“手动运行”：上传参考文件，random 种子在提交前变成具体数字并记录，结果自动下载到本次归档，可预览图片、视频（时长、分辨率、帧率）和音频（波形），也可用相同参数再运行。对话中选一位员工并打开“导演”，TA 会把需求写成制作计划（员工步骤、生成步骤、命令步骤，例如用 ffmpeg 合成），你审阅参数和估算后设置 GPU 分钟或费用上限再启动；下一个任务预计超出上限时暂停提交。导演可以检查生成结果：图片看原图，视频看本机提取的关键帧和元数据，音频只看元数据，不达标时带新参数返工（有次数上限）。旧版 ComfyUI 工具会自动转换为服务器和模板。工作台不开关云主机，也不代替服务商的计费上限。
+## License
 
-其他细节：CLI 可以“复制为新 CLI”、导出为不含凭证的定义文件并在另一台 Mac 导入，也可以设置同时运行上限；检测到 CLI 版本变化时会提示重新检测登录并测试。可编辑的对话轮次在 git 项目中会列出改动的文件并能查看差异。团队计划可以让每个可编辑步骤在独立的 git worktree 中运行，验收后由你选择合并到项目当前分支或放弃，合并冲突留给你在终端处理。生成步骤可以一次运行多个变体（不同种子），只有选用的结果会交给后续步骤；项目可设置验收后把生成结果复制到项目文件夹的“Workbench 导出”。服务器检测会读取已安装的节点，模板缺少节点时提交前就会拒绝。首页工作区卡片显示用到该工作区的项目数。
+Workbench is released under the [MIT License](LICENSE).
 
-## 数据和交付
-
-数据位于~/Library/Application Support/MyWorkbench/workspace.sqlite，日志与产物保存在同目录的Archives。数据格式 4（0.6 起）首次打开时自动升级，升级前保存 workspace.pre-v06.sqlite。升级会保留旧JSON及备份。更改员工不修改历史执行快照；返工保存新版本。
-
-本机应用使用ad hoc签名。Developer ID、公证与App Store分发未包含在本次范围。远程实际生成、原生人工操作及不同硬件运行的验证状态见VALIDATION.md；不能以构建成功代替业务验收。
-
-执行zsh scripts/package_release.sh生成Universal Release应用包、源码包与SHA-256校验文件，输出位于releases，文件名为 Workbench-版本号-macOS.zip 和 Workbench-版本号-source.zip，包含当前 PRD、设计、使用说明与验收记录。
-
-0.4.0新增的CLI登录检测与按需内置终端在本版保留，可从员工档案或侧栏“终端”打开。收起面板保留会话，结束会话才关闭进程；重启仅恢复最近会话的员工、工具与初始目录。手动命令和管理任务分别记录状态。首次构建由SwiftPM下载固定版本的终端依赖。Word v0.3基础PRD需结合V04需求补充与V05界面文档阅读。
-
-## 对象管理补齐
-
-员工页现在提供搜索、编辑、全局删除；各工作区支持新建员工、添加已有员工和移出成员。CLI、服务器、模板、项目、对话、普通任务、计划和产物均有对应删除入口；普通任务支持编辑后重新执行，历史快照保留。操作位置和删除规则见 [对象管理说明](docs/OBJECT_MANAGEMENT.md)。新增 `zsh scripts/verify_crud.sh` 验证成员关系、引用保护、删除后的重启持久化与原生界面。
-
-## 深色外观
-
-深色现为默认外观，按深色参考图调整为深海军蓝底色、四色发光工作区、渐变“新建任务”按钮和深色输入栏。在设置中可切换浅色与深色，选择会保留（偏好键 `studioThemeV06`，旧版的浅色选择不再沿用）。深色插画是独立素材，放入 `docs/design/dark-theme/artwork/` 后运行 `python3 -I scripts/install_dark_artwork.py` 安装；未安装时显示应用内绘制的替代画面。颜色、素材尺寸和安装步骤见 [深色外观说明](docs/design/dark-theme/README.md)。原生外观预览脚本为 `zsh scripts/render_theme_preview.sh`，结果存入 `work/theme-qa`。
+[SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) is also MIT-licensed; its notice is in [docs/third-party/SwiftTerm-LICENSE.txt](docs/third-party/SwiftTerm-LICENSE.txt). The homepage uses the Press Start 2P and VT323 fonts from Google Fonts (SIL Open Font License).

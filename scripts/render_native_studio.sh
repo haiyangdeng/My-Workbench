@@ -7,5 +7,10 @@ fi
 cd "$PROJECT_ROOT"
 mkdir -p work/studio-render
 cp scripts/render_native_studio.swift work/studio-render/main.swift
-xcrun swiftc -I .build/xcode/Build/Products/Debug .build/xcode/Build/Products/Debug/SwiftTerm.o -swift-version 5 Sources/WorkbenchCore/*.swift Sources/WorkbenchApp/WorkbenchStore.swift Sources/WorkbenchApp/WorkbenchView.swift Sources/WorkbenchApp/StudioComponents.swift Sources/WorkbenchApp/ReadOnlyTextView.swift Sources/WorkbenchApp/TerminalWorkspace.swift Sources/WorkbenchApp/WorkspaceConfigurationSheet.swift Sources/WorkbenchApp/ExecutionViews.swift Sources/WorkbenchApp/CollaborationViews.swift work/studio-render/main.swift -o work/studio-render/render
+# Every app source except the @main app file, so newly added files are always included.
+APP_SOURCES=()
+for source in Sources/WorkbenchApp/*.swift; do
+  if [[ "${source:t}" != MyWorkbenchApp.swift ]]; then APP_SOURCES+=("$source"); fi
+done
+xcrun swiftc -I .build/xcode/Build/Products/Debug .build/xcode/Build/Products/Debug/SwiftTerm.o -swift-version 5 Sources/WorkbenchCore/*.swift "${APP_SOURCES[@]}" work/studio-render/main.swift -o work/studio-render/render
 work/studio-render/render

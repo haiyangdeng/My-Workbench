@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Minimal git operations for changed-file lists (CH-11) and worktree isolation (TM-08).
@@ -45,9 +46,27 @@ public struct GitRepository: Sendable {
         return entries
     }
 
-    /// Files whose status changed between two snapshots, sorted.
-    public static func changedFiles(before: [String: String], after: [String: String]) -> [String] {
-        Set(before.keys).union(after.keys).filter { before[$0] != after[$0] }.sorted()
+    /// Files whose status changed between two snapshots, or whose content changed while their status stayed the same
+    /// (a file the user had already modified keeps " M" when an agent edits it further). Sorted.
+    public static func changedFiles(before: [String: String], after: [String: String], beforeContent: [String: String] = [:], afterContent: [String: String] = [:]) -> [String] {
+        Set(before.keys).union(after.keys).filter { before[$0] != after[$0] || (beforeContent[$0] != nil && beforeContent[$0] != afterContent[$0]) }.sorted()
+    }
+
+    /// Content fingerprints of the given files (relative to `directory`): a SHA-256 of the bytes, or size and date for
+    /// files over 64 MB. Missing files and folders are left out.
+    public static func fingerprints(directory: String, files: some Collection<String>) -> [String: String] {
+        var result: [String: String] = [:]
+        let base = URL(fileURLWithPath: directory)
+        for file in files {
+            let url = base.appendingPathComponent(file)
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]), values.isRegularFile == true else { continue }
+            if (values.fileSize ?? 0) > 64 * 1024 * 1024 {
+                result[file] = "size:\(values.fileSize ?? 0):\(values.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+            } else if let data = try? Data(contentsOf: url, options: .mappedIfSafe) {
+                result[file] = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            }
+        }
+        return result
     }
 
     /// Unified diff for the given files, including untracked ones (shown as new files).

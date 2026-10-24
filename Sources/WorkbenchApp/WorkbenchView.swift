@@ -11,31 +11,39 @@ enum SheetKind: String, Identifiable {
 enum Theme {
     /// Theme preference key. A new key so every install starts in the dark default; light stays selectable in Settings.
     static let preferenceKey = "studioThemeV06"
-    static let defaultMood = "ink"
-    static let blue = adaptive("58735E", "4DB293")
+    static let defaultMood = StudioStyle.ink.rawValue
+    /// True while the pixel style is active. Ink and pixel share the dark system appearance, so the dark branch of every
+    /// color reads this to choose between them. WorkbenchView sets it from the saved style before its content draws.
+    nonisolated(unsafe) static var pixelActive = false
+    static func activate(_ style: StudioStyle) { if pixelActive != style.isPixel { pixelActive = style.isPixel } }
+    static let blue = adaptive("58735E", "4DB293", pixel: "29ADFF")
     static let navy = Color(red: 0.17, green: 0.23, blue: 0.20)
-    static func adaptive(_ light: NSColor, _ dark: NSColor) -> Color {
+    static func adaptive(_ light: NSColor, _ dark: NSColor, pixel: NSColor? = nil) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+            guard appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua else { return light }
+            return pixelActive ? (pixel ?? dark) : dark
         })
     }
-    static func adaptive(_ light: String, _ dark: String) -> Color {
+    static func adaptive(_ light: String, _ dark: String, pixel: String? = nil) -> Color {
         func color(_ hex: String) -> NSColor {
             let value = UInt32(hex, radix: 16) ?? 0
             return NSColor(srgbRed: CGFloat((value >> 16) & 255) / 255, green: CGFloat((value >> 8) & 255) / 255, blue: CGFloat(value & 255) / 255, alpha: 1)
         }
-        return adaptive(color(light), color(dark))
+        return adaptive(color(light), color(dark), pixel: pixel.map(color))
     }
     // Dark values follow the 2026-10-18 dark reference: navy canvas, graphite-navy panels, green accent.
-    static let paper = adaptive("F5F8FA", "0B1826")
-    static let surface = adaptive("FFFFFF", "1A2532")
-    static let sidebar = adaptive("EEF3F8", "13202D")
-    static let raised = adaptive("FFFFFF", "222D3A")
-    static let input = adaptive("FFFFFF", "1C2836")
-    static let border = adaptive("DDE7EF", "2B3746")
-    static let primaryText = adaptive("111C27", "F2F5F8")
-    static let secondaryText = adaptive("718094", "A9B4C2")
-    static let actionFill = adaptive("58735E", "2F8170")
+    // Pixel values are an arcade night palette: deep indigo, warm white text, PICO-8-like accents.
+    static let paper = adaptive("F5F8FA", "0B1826", pixel: "080B1E")
+    static let surface = adaptive("FFFFFF", "1A2532", pixel: "111737")
+    static let sidebar = adaptive("EEF3F8", "13202D", pixel: "0C1029")
+    static let raised = adaptive("FFFFFF", "222D3A", pixel: "1A2350")
+    static let input = adaptive("FFFFFF", "1C2836", pixel: "0F1433")
+    static let border = adaptive("DDE7EF", "2B3746", pixel: "2A3672")
+    static let primaryText = adaptive("111C27", "F2F5F8", pixel: "F4F1EA")
+    static let secondaryText = adaptive("718094", "A9B4C2", pixel: "9AA4D2")
+    static let actionFill = adaptive("58735E", "2F8170", pixel: "1D63D8")
+    /// Text on the pixel style's bright workspace-color blocks.
+    static let pixelInk = Color(hex: "0B0E22")
 }
 
 enum StudioSelection: Equatable {
@@ -94,6 +102,7 @@ private struct TemplateRequest: Identifiable {
     @State private var assetModuleID: UUID?
     @State private var chatAgents: [UUID] = []
     @State private var chatMode = ChatMode.single
+    @State private var directorScope: DirectorScope?
     @State private var chatAccess = AccessLevel.readOnly
     @State private var chatAttachments: [String] = []
     @State private var composerProjectID: UUID?
@@ -104,6 +113,9 @@ private struct TemplateRequest: Identifiable {
     @State private var templateRequest: TemplateRequest?
     @State private var manualRunTemplate: WorkflowTemplate?
     @State private var projectsModuleFilter: UUID?
+    @State private var projectsCategoryFilter: UUID?
+    @State private var searchCategory: UUID?
+    @State private var searchModule: UUID?
     @State private var showRemoteToolSheet = false
     @State private var showPlannerSheet = false
     @State private var remoteToolToEdit: ToolConfig?
@@ -114,13 +126,26 @@ private struct TemplateRequest: Identifiable {
     @State private var taskSeed = ""
     @FocusState private var searchFocused: Bool
     @AppStorage(Theme.preferenceKey) private var studioMood = Theme.defaultMood
+    @State private var didAppear = false
 
+    private var style: StudioStyle { StudioStyle.from(studioMood) }
+    private var pixel: Bool { style.isPixel }
     private var accent: Color { Theme.blue }
     private var reviewTasks: [WorkTask] { store.visibleTasks.filter { $0.status == .review } }
 
-    var body: some View {
+    /// The window content in the current style. Ink and pixel share the dark appearance, so their colors would not
+    /// redraw on their own when switching; a new identity per style redraws them.
+    private var styledContent: some View {
+        studioLayout
+            .background { ZStack { Theme.paper; if pixel { PixelGrid() } } }.tint(accent).ignoresSafeArea(.container, edges: .top)
+            .background { GeometryReader { geometry in Color.clear.onAppear { viewHeight = geometry.size.height }.onChange(of: geometry.size.height) { _, height in viewHeight = height } } }
+            .environment(\.studioStyle, style)
+            .id(style)
+    }
+
+    private var studioLayout: some View {
         HStack(spacing: 0) {
-            StudioSidebar(page: $page, reviewCount: reviewTasks.count, onNavigate: { selection = nil; openProjectID = nil; projectsModuleFilter = nil }, onTerminal: showTerminal, onManage: { selection = .manageAreas }, terminalCount: terminals.activeCount)
+            StudioSidebar(page: $page, reviewCount: reviewTasks.count, onNavigate: { selection = nil; openProjectID = nil; projectsModuleFilter = nil; projectsCategoryFilter = nil }, onTerminal: showTerminal, onManage: { selection = .manageAreas }, terminalCount: terminals.activeCount)
             VStack(spacing: 0) {
                 GeometryReader { proxy in
                     ZStack(alignment: .topTrailing) {
@@ -133,14 +158,22 @@ private struct TemplateRequest: Identifiable {
                 if terminals.isVisible {
                     Rectangle().fill(accent.opacity(0.16)).frame(height: 4).overlay { Capsule().fill(accent.opacity(0.45)).frame(width: 45, height: 2) }
                         .gesture(DragGesture().onChanged { value in consoleHeight = min(380, max(210, consoleHeight - value.translation.height / 12)) })
-                    TerminalPanel(terminals: terminals, store: store, dark: studioMood == "ink").frame(height: min(consoleHeight, viewHeight < 800 ? 220 : 320))
+                    TerminalPanel(terminals: terminals, store: store, dark: style.isDark).frame(height: min(consoleHeight, viewHeight < 800 ? 220 : 320))
                 } else { composer }
             }
         }
-        .background(Theme.paper).tint(accent).ignoresSafeArea(.container, edges: .top)
-        .background { GeometryReader { geometry in Color.clear.onAppear { viewHeight = geometry.size.height }.onChange(of: geometry.size.height) { _, height in viewHeight = height } } }
-        .preferredColorScheme(studioMood == "ink" ? .dark : .light)
-        .onAppear { page = initialPage; if let initialSelection { selection = initialSelection }; if let initialProjectID { openProject(initialProjectID) }; applyAppearance() }
+    }
+
+    var body: some View {
+        let _ = Theme.activate(style)
+        styledContent
+        .preferredColorScheme(style.isDark ? .dark : .light)
+        .onAppear {
+            applyAppearance()
+            guard !didAppear else { return }
+            didAppear = true
+            page = initialPage; if let initialSelection { selection = initialSelection }; if let initialProjectID { openProject(initialProjectID) }
+        }
         .onChange(of: studioMood) { _, _ in applyAppearance() }
         .sheet(item: $areaRequest) { request in WorkspaceConfigurationSheet(store: store, areaToEdit: request.area) }
         .alert("终端提示", isPresented: Binding(get: { terminals.error != nil }, set: { if !$0 { terminals.error = nil } })) { Button("知道了") { terminals.error = nil } } message: { Text(terminals.error ?? "") }
@@ -242,7 +275,7 @@ private struct TemplateRequest: Identifiable {
                         Text("所有项目 · \(store.workspaces.count) 个工作区").foregroundStyle(.secondary)
                         Spacer()
                         Button { areaRequest = WorkspaceSheetRequest(area: nil) } label: { Label("添加工作区", systemImage: "plus") }.disabled(!store.storageAvailable)
-                    }.font(.system(size: 10)).buttonStyle(.plain).padding(.horizontal, 28).padding(.top, 9).padding(.bottom, 4)
+                    }.font(.system(size: 10)).buttonStyle(.plainPointer).padding(.horizontal, 28).padding(.top, 9).padding(.bottom, 4)
                 }
             }.onChange(of: store.workspaces.count) { _, _ in
                 if let id = store.workspaces.last?.id { withAnimation { reader.scrollTo(id, anchor: .bottom) } }
@@ -260,8 +293,11 @@ private struct TemplateRequest: Identifiable {
             }
             Spacer()
             Button("添加 CLI") { newConfiguration(.tool) }.buttonStyle(StudioPrimaryButtonStyle()).accessibilityIdentifier("home.add-cli")
-        }.padding(.horizontal, 18).padding(.vertical, 12).background(Theme.surface.opacity(0.9), in: RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).stroke(accent.opacity(0.18)))
+        }.padding(.horizontal, 18).padding(.vertical, 12).background(Theme.surface.opacity(0.9), in: StudioShape(14, pixel: pixel)).overlay(StudioShape(14, pixel: pixel).stroke(pixel ? Theme.border : accent.opacity(0.18), lineWidth: pixel ? 2 : 1))
     }
+
+    private var headerFill: Color { Theme.adaptive(NSColor.white.withAlphaComponent(0.65), NSColor(srgbRed: 0.11, green: 0.157, blue: 0.212, alpha: 0.92), pixel: NSColor(srgbRed: 0.059, green: 0.078, blue: 0.2, alpha: 0.94)) }
+    private var headerStroke: Color { Theme.adaptive("FFFFFF", "2B3746", pixel: "2A3672") }
 
     private var headerControls: some View {
         HStack(spacing: 17) {
@@ -273,15 +309,20 @@ private struct TemplateRequest: Identifiable {
                     Spacer()
                     Text("⌘ K").font(.system(size: 10))
                 }.font(.system(size: 11)).foregroundStyle(Theme.secondaryText)
-                    .padding(.horizontal, 14).frame(width: 300, height: 35).background(Theme.adaptive(NSColor.white.withAlphaComponent(0.65), NSColor(srgbRed: 0.11, green: 0.157, blue: 0.212, alpha: 0.92)), in: Capsule()).overlay(Capsule().stroke(Theme.adaptive("FFFFFF", "2B3746")))
-            }.buttonStyle(.plain).keyboardShortcut("k", modifiers: .command)
+                    .padding(.horizontal, 14).frame(width: 300, height: 35).background(headerFill, in: StudioShape(17.5, pixel: pixel)).overlay(StudioShape(17.5, pixel: pixel).stroke(headerStroke, lineWidth: pixel ? 2 : 1))
+            }.buttonStyle(.plainPointer).keyboardShortcut("k", modifiers: .command)
             Button { if let task = reviewTasks.first { selection = .task(task.id) } else { page = .projects; selection = nil } } label: {
-                Image(systemName: "bell").font(.system(size: 17)).foregroundStyle(Theme.adaptive("233A4F", "E6EDF4")).frame(width: 35, height: 35).background(Theme.adaptive(NSColor.white.withAlphaComponent(0.65), NSColor(srgbRed: 0.11, green: 0.157, blue: 0.212, alpha: 0.92)), in: Circle()).overlay(Circle().stroke(Theme.adaptive("FFFFFF", "2B3746")))
+                Image(systemName: "bell").font(.system(size: 17)).foregroundStyle(Theme.adaptive("233A4F", "E6EDF4")).frame(width: 35, height: 35).background(headerFill, in: StudioShape(17.5, pixel: pixel)).overlay(StudioShape(17.5, pixel: pixel).stroke(headerStroke, lineWidth: pixel ? 2 : 1))
                     .overlay(alignment: .topTrailing) { if !reviewTasks.isEmpty { Circle().fill(.orange).frame(width: 7, height: 7).padding(3) } }
-            }.buttonStyle(.plain).help("\(reviewTasks.count) 项待验收").accessibilityLabel("待验收任务：\(reviewTasks.count)")
+            }.buttonStyle(.plainPointer).help("\(reviewTasks.count) 项待验收").accessibilityLabel("待验收任务：\(reviewTasks.count)")
             Button { page = .settings; selection = nil } label: {
-                Image(systemName: "person.crop.circle.fill").symbolRenderingMode(.palette).foregroundStyle(Theme.adaptive("335E50", "1C2836"), Theme.adaptive(NSColor.white.withAlphaComponent(0.9), NSColor(srgbRed: 0.93, green: 0.95, blue: 0.97, alpha: 1))).font(.system(size: 34))
-            }.buttonStyle(.plain).help("工作室设置").accessibilityLabel("工作室设置")
+                if pixel {
+                    Image(systemName: "person.fill").font(.system(size: 16)).foregroundStyle(Theme.primaryText).frame(width: 35, height: 35)
+                        .background(Theme.raised, in: StudioShape(17.5, pixel: true)).overlay(StudioShape(17.5, pixel: true).stroke(Theme.blue, lineWidth: 2))
+                } else {
+                    Image(systemName: "person.crop.circle.fill").symbolRenderingMode(.palette).foregroundStyle(Theme.adaptive("335E50", "1C2836"), Theme.adaptive(NSColor.white.withAlphaComponent(0.9), NSColor(srgbRed: 0.93, green: 0.95, blue: 0.97, alpha: 1))).font(.system(size: 34))
+                }
+            }.buttonStyle(.plainPointer).help("工作室设置").accessibilityLabel("工作室设置")
         }.frame(height: 36)
     }
 
@@ -299,7 +340,7 @@ private struct TemplateRequest: Identifiable {
                         .buttonStyle(StudioPrimaryButtonStyle()).disabled(!store.storageAvailable)
                 }
                 if page == .projects && openProjectID == nil {
-                    Button("管理分类") { showCategorySheet = true }.buttonStyle(.bordered).disabled(!store.storageAvailable)
+                    Button("管理分类") { showCategorySheet = true }.buttonStyle(.borderedPointer).disabled(!store.storageAvailable)
                     Button { projectRequest = ProjectSheetRequest(project: nil) } label: { Label("添加项目", systemImage: "plus") }.buttonStyle(StudioPrimaryButtonStyle()).disabled(!store.storageAvailable)
                 }
                 if page == .workflow || page == .knowledge {
@@ -314,12 +355,12 @@ private struct TemplateRequest: Identifiable {
                 Group {
                     if page == .employees { employeeDirectory }
                     else if page == .projects && openProjectID == nil {
-                        AllProjectsView(store: store, accent: accent, onOpen: openProject, onEdit: { projectRequest = ProjectSheetRequest(project: $0) }, onTask: { selection = .task($0) }, initialModuleID: projectsModuleFilter)
-                            .id(projectsModuleFilter)
+                        AllProjectsView(store: store, accent: accent, onOpen: openProject, onEdit: { projectRequest = ProjectSheetRequest(project: $0) }, onTask: { selection = .task($0) }, initialModuleID: projectsModuleFilter, initialCategoryID: projectsCategoryFilter)
+                            .id((projectsModuleFilter?.uuidString ?? "") + "|" + (projectsCategoryFilter?.uuidString ?? ""))
                     } else {
                         inspectorContent(for: pageSelection).frame(maxWidth: .infinity, alignment: .leading).padding(28)
-                            .background(Theme.surface.opacity(0.92), in: RoundedRectangle(cornerRadius: 20))
-                            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Theme.blue.opacity(0.08)))
+                            .background(Theme.surface.opacity(0.92), in: StudioShape(20, pixel: pixel))
+                            .overlay(StudioShape(20, pixel: pixel).stroke(pixel ? Theme.border : Theme.blue.opacity(0.08), lineWidth: pixel ? 2 : 1))
                     }
                 }.padding(.horizontal, 34).padding(.bottom, 24)
             } }
@@ -370,7 +411,19 @@ private struct TemplateRequest: Identifiable {
         do { try store.exportedDefinition(tool.id).write(to: url, options: .atomic) } catch { store.errorMessage = "导出失败：\(error.localizedDescription)" }
     }
     /// Every window, sheet, alert and file dialog follows the chosen theme, not just this view.
-    private func applyAppearance() { NSApp?.appearance = NSAppearance(named: studioMood == "ink" ? .darkAqua : .aqua) }
+    @ViewBuilder private func styleSwatch(_ option: StudioStyle) -> some View {
+        switch option {
+        case .ink: Circle().fill(Color(hex: "0B1826")).overlay(Circle().stroke(Color(hex: "4DB293"), lineWidth: 2))
+        case .paper: Circle().fill(Color(hex: "B2D7F0"))
+        case .pixel:
+            // Four workspace colors as 2×2 pixel blocks on the indigo canvas.
+            VStack(spacing: 2) {
+                HStack(spacing: 2) { Rectangle().fill(Color(hex: "FF9A1F")); Rectangle().fill(Color(hex: "A66BFF")) }
+                HStack(spacing: 2) { Rectangle().fill(Color(hex: "29ADFF")); Rectangle().fill(Color(hex: "2BD46F")) }
+            }.padding(6).background(Color(hex: "080B1E"), in: StudioShape(10, pixel: true)).overlay(StudioShape(10, pixel: true).stroke(Color(hex: "2A3672"), lineWidth: 2))
+        }
+    }
+    private func applyAppearance() { NSApp?.appearance = NSAppearance(named: style.isDark ? .darkAqua : .aqua) }
     private func openProject(_ id: UUID) {
         store.activeProjectID = id; openProjectID = id; selection = nil
         openConversationID = store.conversations(in: id).first?.id
@@ -384,16 +437,16 @@ private struct TemplateRequest: Identifiable {
     @ViewBuilder private var projectHeader: some View {
         if let project = store.project(openProjectID) {
             VStack(alignment: .leading, spacing: 12) {
-                Button { openProjectID = nil } label: { Label("所有项目", systemImage: "chevron.left") }.buttonStyle(.link).accessibilityIdentifier("projects.back")
+                Button { openProjectID = nil } label: { Label("所有项目", systemImage: "chevron.left") }.buttonStyle(.linkPointer).accessibilityIdentifier("projects.back")
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(project.name).font(.system(size: 23, weight: .semibold))
                     let category = store.category(store.snapshot.categoryID(of: project))
                     Label(category?.name ?? ProjectCategory.uncategorizedName, systemImage: category?.icon ?? "tray").font(.system(size: 11)).foregroundStyle(category.map { Color(hex: $0.color) } ?? .secondary)
                     if project.isArchived { Text("已归档 · 只能查看").font(.system(size: 11)).foregroundStyle(.orange) }
                     Spacer()
-                    Button("编辑项目") { projectRequest = ProjectSheetRequest(project: project) }.buttonStyle(.bordered)
-                    Button("删除项目", role: .destructive) { store.pendingDeletion = DeletionTarget(.project, project.id) }.buttonStyle(.bordered)
-                    Button(project.isArchived ? "取消归档" : "归档") { store.setProjectArchived(project.id, !project.isArchived) }.buttonStyle(.bordered)
+                    Button("编辑项目") { projectRequest = ProjectSheetRequest(project: project) }.buttonStyle(.borderedPointer)
+                    Button("删除项目", role: .destructive) { store.pendingDeletion = DeletionTarget(.project, project.id) }.buttonStyle(.borderedPointer)
+                    Button(project.isArchived ? "取消归档" : "归档") { store.setProjectArchived(project.id, !project.isArchived) }.buttonStyle(.borderedPointer)
                 }
                 HStack(spacing: 8) {
                     ForEach(store.snapshot.modules(of: project), id: \.self) { id in
@@ -423,7 +476,7 @@ private struct TemplateRequest: Identifiable {
             HStack {
                 StudioSearchField(prompt: "搜索员工姓名、职位或职责", text: $employeeSearch).frame(maxWidth: 360)
                 Spacer()
-                Button("新增 AI 员工") { newConfiguration(.employee) }.buttonStyle(.bordered).disabled(!store.hasCLI || !store.storageAvailable)
+                Button("新增 AI 员工") { newConfiguration(.employee) }.buttonStyle(.borderedPointer).disabled(!store.hasCLI || !store.storageAvailable)
             }
             ForEach(store.workspaces) { area in
                 employeeGroup(title: area.name, area: area, members: store.employees(in: area))
@@ -462,15 +515,15 @@ private struct TemplateRequest: Identifiable {
                                 }
                                 Spacer(); Image(systemName: "arrow.up.right").font(.system(size: 11))
                             }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(.plainPointer)
                         HStack(spacing: 12) {
                             Button("编辑") { editEmployee(employee) }
                             if let area { Button("移出工作区") { pendingMemberRemoval = EmployeeWorkspaceRemoval(employeeID: employee.id, workspaceID: area.id) } }
                             Spacer(minLength: 0)
                             Button("删除", role: .destructive) { store.pendingDeletion = DeletionTarget(.employee, employee.id) }
-                        }.font(.system(size: 11)).buttonStyle(.link).disabled(!store.storageAvailable)
-                    }.padding(18).background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
-                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(tint.opacity(0.15)))
+                        }.font(.system(size: 11)).buttonStyle(.linkPointer).disabled(!store.storageAvailable)
+                    }.padding(18).background(Theme.surface, in: StudioShape(14, pixel: pixel))
+                        .overlay(StudioShape(14, pixel: pixel).stroke(pixel ? tint.opacity(0.55) : tint.opacity(0.15), lineWidth: pixel ? 2 : 1))
                         .contextMenu { employeeActionButtons(employee, workspaceID: area?.id) }
                         .accessibilityIdentifier("employees.card." + employee.id.uuidString)
                 }
@@ -498,7 +551,7 @@ private struct TemplateRequest: Identifiable {
                          onSend: sendChat, onAttach: chooseReferenceFiles, onNewTask: composeTask, onPlanner: { showPlannerSheet = true },
                          onAddWorkspace: { areaRequest = WorkspaceSheetRequest(area: nil) }, onTerminal: showTerminal,
                          onNewProject: { projectRequest = ProjectSheetRequest(project: nil) },
-                         onNewConversation: { openConversationID = nil; if page == .projects, openProjectID != nil { projectTab = .conversations } })
+                         onNewConversation: { openConversationID = nil; if page == .projects, openProjectID != nil { projectTab = .conversations } }, directorScope: $directorScope)
             .frame(maxWidth: .infinity)
             .overlay(alignment: .bottomTrailing) {
                 Text("ONE PERSON   ×   AI TEAM").font(.system(size: 8)).tracking(1.5).foregroundStyle(.secondary.opacity(0.7)).padding(.trailing, 29).padding(.bottom, 4)
@@ -526,7 +579,7 @@ private struct TemplateRequest: Identifiable {
             store.errorMessage = "先在输入栏左上角选择一个项目，或新建项目。输入会保留。"; return
         }
         let conversationID = inProject && projectTab == .conversations ? openConversationID : nil
-        guard let id = store.sendMessage(text, attachments: chatAttachments, projectID: projectID, conversationID: conversationID, agentIDs: chatAgents, mode: chatMode, access: chatAccess) else { return }
+        guard let id = store.sendMessage(text, attachments: chatAttachments, projectID: projectID, conversationID: conversationID, agentIDs: chatAgents, mode: chatMode, access: chatAccess, directorScope: chatMode == .director ? directorScope : nil) else { return }
         ideaText = ""; chatAttachments = []
         page = .projects; selection = nil
         if openProjectID != projectID { openProject(projectID) }
@@ -564,7 +617,7 @@ private struct TemplateRequest: Identifiable {
             HStack {
                 Text(inspectorTitle).font(.system(size: 10)).foregroundStyle(.secondary)
                 Spacer()
-                Button { selection = nil } label: { Image(systemName: "xmark").padding(7) }.buttonStyle(.plain).help("收起对象详情").accessibilityLabel("收起对象详情")
+                Button { selection = nil } label: { Image(systemName: "xmark").padding(7) }.buttonStyle(.plainPointer).help("收起对象详情").accessibilityLabel("收起对象详情")
             }.padding(.horizontal, 21).padding(.vertical, 15)
             Divider()
             ScrollView {
@@ -619,7 +672,7 @@ private struct TemplateRequest: Identifiable {
                             HStack {
                                 Button("检测登录") { store.checkLogin(tool.id) }.disabled(check.state == .checking || tool.authenticationStatusArguments == nil)
                                 Button("打开终端") { openTerminal(employee) }.disabled(!tool.isCLI || !tool.executableAvailable)
-                            }.buttonStyle(.bordered).font(.system(size: 11))
+                            }.buttonStyle(.borderedPointer).font(.system(size: 11))
                             if tool.authenticationLoginArguments != nil { Button("在终端登录账号") { openTerminal(employee, login: true) }.font(.system(size: 11)) }
                             if check.state == .failed { Text(check.detail).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(5).textSelection(.enabled) }
                         }.padding(13).background(accent.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
@@ -628,9 +681,9 @@ private struct TemplateRequest: Identifiable {
                         HStack { Text(task.title).font(.system(size: 11, weight: .medium)).lineLimit(1); Spacer(); StatusBadge(status: task.status) }
                     }
                     DisclosureGroup("职责说明") { Text(employee.instructions.isEmpty ? "尚未填写职责说明。" : employee.instructions).font(.system(size: 12)).lineSpacing(5).textSelection(.enabled) }.font(.system(size: 11))
-                    Button("编辑员工档案") { editEmployee(employee) }.buttonStyle(.bordered).disabled(!store.storageAvailable)
-                    Button(employee.enabled == false ? "启用员工" : "停用员工") { var updated = employee; updated.enabled = !(employee.enabled ?? true); store.updateEmployee(updated) }.buttonStyle(.bordered)
-                    Button("删除员工", role: .destructive) { store.pendingDeletion = DeletionTarget(.employee, employee.id) }.buttonStyle(.bordered)
+                    Button("编辑员工档案") { editEmployee(employee) }.buttonStyle(.borderedPointer).disabled(!store.storageAvailable)
+                    Button(employee.enabled == false ? "启用员工" : "停用员工") { var updated = employee; updated.enabled = !(employee.enabled ?? true); store.updateEmployee(updated) }.buttonStyle(.borderedPointer)
+                    Button("删除员工", role: .destructive) { store.pendingDeletion = DeletionTarget(.employee, employee.id) }.buttonStyle(.borderedPointer)
                     Divider()
                     Text("桌上的任务").font(.system(size: 11, weight: .medium))
                     taskRows(store.visibleTasks.filter { $0.employeeID == id })
@@ -644,8 +697,8 @@ private struct TemplateRequest: Identifiable {
                     ForEach(store.employees(in: area)) { employee in employeeRow(employee, workspaceID: area.id) }
                     Button("新增员工") { addEmployee(to: area) }
                     Button("添加已有员工") { memberPickerArea = area }.buttonStyle(StudioPrimaryButtonStyle()).disabled(!store.storageAvailable)
-                    Button("编辑工作区") { areaRequest = WorkspaceSheetRequest(area: area) }.buttonStyle(.bordered)
-                    Button("删除工作区", role: .destructive) { store.pendingDeletion = DeletionTarget(.workspace, area.id) }.buttonStyle(.bordered)
+                    Button("编辑工作区") { areaRequest = WorkspaceSheetRequest(area: area) }.buttonStyle(.borderedPointer)
+                    Button("删除工作区", role: .destructive) { store.pendingDeletion = DeletionTarget(.workspace, area.id) }.buttonStyle(.borderedPointer)
                     Divider(); taskRows(store.tasks(in: area))
                 }
             }
@@ -657,7 +710,7 @@ private struct TemplateRequest: Identifiable {
                     HStack {
                         Button { areaRequest = WorkspaceSheetRequest(area: area) } label: {
                             Label(area.name, systemImage: area.icon).foregroundStyle(Color(hex: area.color))
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(.plainPointer)
                         Spacer()
                         Text("\(store.employees(in: area).count) 人").foregroundStyle(.secondary)
                         Button("编辑") { areaRequest = WorkspaceSheetRequest(area: area) }
@@ -703,46 +756,28 @@ private struct TemplateRequest: Identifiable {
             VStack(alignment: .leading, spacing: 22) {
                 Text("工作室，也有\n你的性格。").font(.system(size: 24, weight: .medium))
                 Picker("同时执行", selection: $store.concurrencyLimit) { Text("1 个任务").tag(1); Text("2 个任务").tag(2) }.onChange(of: store.concurrencyLimit) { _, _ in store.schedulePending() }
-                Text("默认使用深色。你也可以改用浅色，设置会在下次启动时保留，不随系统外观变化。").font(.system(size: 12)).foregroundStyle(.secondary)
-                ForEach(["ink", "paper"], id: \.self) { mood in
-                    Button { studioMood = mood } label: {
+                Text("默认使用深色。你也可以改用像素风格或浅色，设置会在下次启动时保留，不随系统外观变化。").font(.system(size: 12)).foregroundStyle(.secondary)
+                ForEach(StudioStyle.allCases) { option in
+                    Button { studioMood = option.rawValue } label: {
                         HStack {
-                            Circle().fill(mood == "paper" ? Color(hex: "B2D7F0") : Color(hex: "0B1826")).overlay(Circle().stroke(mood == "ink" ? Color(hex: "4DB293") : .clear, lineWidth: 2)).frame(width: 34, height: 34)
+                            styleSwatch(option).frame(width: 34, height: 34)
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(mood == "paper" ? "云蓝 · 浅色" : "夜幕 · 深色（默认）").font(.system(size: 13))
-                                Text(mood == "paper" ? "通透浅蓝与四色工作区" : "深海军蓝底色、明亮的四色工作区与发光插画").font(.system(size: 10)).foregroundStyle(.secondary)
+                                Text(option.title).font(.system(size: 13))
+                                Text(option.subtitle).font(.system(size: 10)).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            if studioMood == mood { Image(systemName: "checkmark") }
-                        }.padding(14).background(accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(accent.opacity(studioMood == mood ? 0.6 : 0.2)))
-                    }.buttonStyle(.plain)
+                            if style == option { Image(systemName: "checkmark") }
+                        }.padding(14).background(accent.opacity(0.06), in: StudioShape(12, pixel: pixel))
+                            .overlay(StudioShape(12, pixel: pixel).stroke(accent.opacity(style == option ? 0.6 : 0.2), lineWidth: pixel ? 2 : 1))
+                    }.buttonStyle(.plainPointer).accessibilityIdentifier("settings.style." + option.rawValue)
                 }
                 Divider()
-                Button("管理工作区") { selection = .manageAreas }.buttonStyle(.bordered)
+                Button("管理工作区") { selection = .manageAreas }.buttonStyle(.borderedPointer)
                 Button("添加工作区") { areaRequest = WorkspaceSheetRequest(area: nil) }.buttonStyle(StudioPrimaryButtonStyle()).disabled(!store.storageAvailable)
                 Text("员工、项目、任务和工作记录存储在本机。CLI 与远程制作服务使用各自的连接配置。").font(.system(size: 12)).foregroundStyle(.secondary)
             }
         case .search:
-            VStack(alignment: .leading, spacing: 19) {
-                TextField("名字、职责或任务标题", text: $searchText).textFieldStyle(.roundedBorder).focused($searchFocused).onAppear { searchFocused = true }
-                Text("项目").font(.system(size: 10)).foregroundStyle(.secondary)
-                ForEach(store.snapshot.projects.current.filter { searchText.isEmpty || ($0.name + $0.goal).localizedCaseInsensitiveContains(searchText) }) { project in
-                    Button { page = .projects; openProject(project.id) } label: { Label(project.name, systemImage: "folder").font(.system(size: 12)) }.buttonStyle(.plain)
-                }
-                Divider()
-                Text("对话").font(.system(size: 10)).foregroundStyle(.secondary)
-                ForEach(store.snapshot.conversations.current.filter { conversation in searchText.isEmpty || conversation.title.localizedCaseInsensitiveContains(searchText) || store.snapshot.messages.contains { $0.conversationID == conversation.id && $0.text.localizedCaseInsensitiveContains(searchText) } }.sorted { $0.updatedAt > $1.updatedAt }.prefix(12)) { conversation in
-                    Button { page = .projects; openProject(conversation.projectID); projectTab = .conversations; openConversationID = conversation.id } label: {
-                        Label(conversation.title + " · " + (store.project(conversation.projectID)?.name ?? ""), systemImage: "bubble.left.and.bubble.right").font(.system(size: 12))
-                    }.buttonStyle(.plain)
-                }
-                Divider()
-                Text("员工").font(.system(size: 10)).foregroundStyle(.secondary)
-                ForEach(store.snapshot.employees.current.filter { searchText.isEmpty || ($0.name + $0.role + $0.department).localizedCaseInsensitiveContains(searchText) }) { employee in employeeRow(employee) }
-                Divider()
-                Text("任务").font(.system(size: 10)).foregroundStyle(.secondary)
-                taskRows(store.visibleTasks.filter { searchText.isEmpty || ($0.title + $0.input).localizedCaseInsensitiveContains(searchText) })
-            }
+            searchContent
         default:
             VStack(alignment: .leading, spacing: 18) {
                 if page == .projects && openProjectID != nil { EmptyView() }
@@ -751,7 +786,7 @@ private struct TemplateRequest: Identifiable {
                         Text("未归属项目").tag(Optional<UUID>.none)
                         ForEach(store.snapshot.projects.current.filter { !$0.isArchived || $0.id == store.activeProjectID }) { Text($0.name).tag(Optional($0.id)) }
                     }
-                    Button("添加项目") { projectRequest = ProjectSheetRequest(project: nil) }.buttonStyle(.bordered)
+                    Button("添加项目") { projectRequest = ProjectSheetRequest(project: nil) }.buttonStyle(.borderedPointer)
                 }
                 Button("让AI安排协作") { showPlannerSheet = true }.buttonStyle(StudioPrimaryButtonStyle()).disabled(store.currentProject?.isArchived != false || store.planningCandidates.isEmpty)
                 CollaborationPanel(store: store) { selection = .task($0) }
@@ -763,7 +798,7 @@ private struct TemplateRequest: Identifiable {
                                 Text(handoff.goal).foregroundStyle(.secondary)
                                 Text("来源 run \(handoff.sourceRunID.uuidString.prefix(8))").font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
                             }.font(.system(size: 11))
-                        }.buttonStyle(.plain).disabled(!store.visibleTasks.contains(where: { $0.id == target }))
+                        }.buttonStyle(.plainPointer).disabled(!store.visibleTasks.contains(where: { $0.id == target }))
                     }
                 }
                 if let project = store.currentProject { Text(project.goal).font(.system(size: 12)).foregroundStyle(.secondary) }
@@ -803,7 +838,7 @@ private struct TemplateRequest: Identifiable {
                 DisclosureGroup {
                     VStack(alignment: .leading, spacing: 12) {
                         Text(employee.instructions.isEmpty ? "尚未填写职责说明。" : employee.instructions).font(.system(size: 12)).lineSpacing(5).textSelection(.enabled)
-                        Button("查看与编辑员工") { selection = .employee(employee.id) }.buttonStyle(.bordered)
+                        Button("查看与编辑员工") { selection = .employee(employee.id) }.buttonStyle(.borderedPointer)
                     }.padding(.vertical, 12)
                 } label: { Text(employee.name + " · " + employee.role).font(.system(size: 13, weight: .medium)) }
             }
@@ -825,7 +860,7 @@ private struct TemplateRequest: Identifiable {
             Text("先生成分工计划，确认负责人、依赖与验收方式，再启动协作。").font(.system(size: 12)).foregroundStyle(.secondary)
             if store.snapshot.plans.current.filter({ $0.projectID == store.activeProjectID }).isEmpty {
                 Text(store.currentProject == nil ? "请先创建并选择一个项目。" : "这个项目还没有协作计划。").font(.system(size: 13)).foregroundStyle(.secondary).padding(.vertical, 15)
-                if store.currentProject == nil { Button("创建项目") { projectRequest = ProjectSheetRequest(project: nil) }.buttonStyle(.bordered) }
+                if store.currentProject == nil { Button("创建项目") { projectRequest = ProjectSheetRequest(project: nil) }.buttonStyle(.borderedPointer) }
             }
             CollaborationPanel(store: store) { selection = .task($0) }
             Divider()
@@ -834,11 +869,73 @@ private struct TemplateRequest: Identifiable {
             if handoffs.isEmpty { Text("任务产物验收后，可从任务详情交给下一位伙伴。").font(.system(size: 12)).foregroundStyle(.secondary) }
             ForEach(handoffs) { handoff in
                 if let target = handoff.targetTaskID {
-                    Button { selection = .task(target) } label: { Label(handoff.goal + " → " + (store.employee(handoff.targetEmployeeID)?.name ?? "未知员工"), systemImage: "arrow.right").font(.system(size: 12)) }.buttonStyle(.plain).disabled(!store.visibleTasks.contains { $0.id == target })
+                    Button { selection = .task(target) } label: { Label(handoff.goal + " → " + (store.employee(handoff.targetEmployeeID)?.name ?? "未知员工"), systemImage: "arrow.right").font(.system(size: 12)) }.buttonStyle(.plainPointer).disabled(!store.visibleTasks.contains { $0.id == target })
                 }
             }
         }
     }
+    // CH-13: one search over projects, categories, conversations, employees and tasks, narrowed by category and module.
+    private func searchProjectMatches(_ id: UUID?) -> Bool {
+        guard searchCategory != nil || searchModule != nil else { return true }
+        guard let project = store.project(id) else { return false }
+        return (searchCategory == nil || project.categoryID == searchCategory) && (searchModule.map { (project.moduleIDs ?? []).contains($0) } ?? true)
+    }
+    private func searchHit(_ text: String) -> Bool { searchText.isEmpty || text.localizedCaseInsensitiveContains(searchText) }
+    private var searchCategories: [ProjectCategory] { store.snapshot.sortedCategories.filter { (searchCategory == nil || $0.id == searchCategory) && searchHit($0.name) } }
+    private var searchProjects: [WorkProject] { store.snapshot.projects.current.filter { searchProjectMatches($0.id) && searchHit($0.name + $0.goal) } }
+    private var searchConversations: [Conversation] {
+        store.snapshot.conversations.current.filter { conversation in
+            searchProjectMatches(conversation.projectID) && (searchHit(conversation.title) || (!searchText.isEmpty && store.snapshot.messages.contains { $0.conversationID == conversation.id && $0.text.localizedCaseInsensitiveContains(searchText) }))
+        }
+    }
+    private var searchEmployees: [Employee] {
+        store.snapshot.employees.current.filter { employee in
+            let inModule = searchModule.map { employee.workspaceID == $0 || (employee.additionalWorkspaceIDs ?? []).contains($0) } ?? true
+            return inModule && searchHit(employee.name + employee.role + employee.department)
+        }
+    }
+    private var searchTasks: [WorkTask] { store.visibleTasks.filter { searchProjectMatches($0.projectID) && searchHit($0.title + $0.input) } }
+
+    private var searchContent: some View {
+        VStack(alignment: .leading, spacing: 19) {
+            TextField("名字、职责、对话或任务标题", text: $searchText).textFieldStyle(.roundedBorder).focused($searchFocused).onAppear { searchFocused = true }
+            HStack {
+                Picker("分类", selection: $searchCategory) {
+                    Text("全部分类").tag(Optional<UUID>.none)
+                    ForEach(store.snapshot.sortedCategories) { Text($0.name).tag(Optional($0.id)) }
+                }.frame(maxWidth: 220)
+                Picker("工作区", selection: $searchModule) {
+                    Text("全部工作区").tag(Optional<UUID>.none)
+                    ForEach(store.workspaces) { Text($0.name).tag(Optional($0.id)) }
+                }.frame(maxWidth: 220)
+            }.font(.system(size: 11)).accessibilityIdentifier("search.filters")
+            Text("分类").font(.system(size: 10)).foregroundStyle(.secondary)
+            ForEach(searchCategories) { category in
+                Button { projectsCategoryFilter = category.id; projectsModuleFilter = searchModule; openProjectID = nil; selection = nil; page = .projects } label: {
+                    Label(category.name + " · \(store.snapshot.projects.current.filter { $0.categoryID == category.id }.count) 个项目", systemImage: category.icon.isEmpty ? "folder" : category.icon).font(.system(size: 12))
+                }.buttonStyle(.plainPointer)
+            }
+            Divider()
+            Text("项目").font(.system(size: 10)).foregroundStyle(.secondary)
+            ForEach(searchProjects) { project in
+                Button { page = .projects; openProject(project.id) } label: { Label(project.name, systemImage: "folder").font(.system(size: 12)) }.buttonStyle(.plainPointer)
+            }
+            Divider()
+            Text("对话").font(.system(size: 10)).foregroundStyle(.secondary)
+            ForEach(searchConversations) { conversation in
+                Button { page = .projects; openProject(conversation.projectID); projectTab = .conversations; openConversationID = conversation.id } label: {
+                    Label(conversation.title + " · " + (store.project(conversation.projectID)?.name ?? ""), systemImage: "bubble.left.and.bubble.right").font(.system(size: 12))
+                }.buttonStyle(.plainPointer)
+            }
+            Divider()
+            Text("员工").font(.system(size: 10)).foregroundStyle(.secondary)
+            ForEach(searchEmployees) { employee in employeeRow(employee) }
+            Divider()
+            Text("任务").font(.system(size: 10)).foregroundStyle(.secondary)
+            taskRows(searchTasks)
+        }
+    }
+
     private func employeeRow(_ employee: Employee, workspaceID: UUID? = nil) -> some View {
         Button { selection = .employee(employee.id) } label: {
             HStack {
@@ -846,7 +943,7 @@ private struct TemplateRequest: Identifiable {
                 VStack(alignment: .leading, spacing: 5) { Text(employee.name).font(.system(size: 12)); Text(employee.role).font(.system(size: 10)).foregroundStyle(.secondary) }
                 Spacer(); Image(systemName: "arrow.up.right").font(.system(size: 10))
             }.padding(.vertical, 8)
-        }.buttonStyle(.plain).contextMenu { employeeActionButtons(employee, workspaceID: workspaceID) }
+        }.buttonStyle(.plainPointer).contextMenu { employeeActionButtons(employee, workspaceID: workspaceID) }
             .overlay(alignment: .trailing) { Menu { employeeActionButtons(employee, workspaceID: workspaceID) } label: { Image(systemName: "ellipsis").frame(width: 28, height: 28) }.menuStyle(.borderlessButton).frame(width: 28).accessibilityLabel("员工操作：" + employee.name) }
     }
     @ViewBuilder private func taskRows(_ tasks: [WorkTask]) -> some View {
@@ -858,7 +955,7 @@ private struct TemplateRequest: Identifiable {
                     HStack { Text(store.ownerName(task)).font(.system(size: 10)).foregroundStyle(.secondary); Spacer(); StatusBadge(status: task.status) }
                     Divider()
                 }.padding(.vertical, 7)
-            }.buttonStyle(.plain)
+            }.buttonStyle(.plainPointer)
         }
     }
     private func newConfiguration(_ kind: SheetKind) { preferredEmployee = nil; preferredDepartment = nil; preferredTool = nil; editingEmployee = nil; editingTool = nil; editingTask = nil; sheet = kind }
@@ -954,7 +1051,7 @@ struct TaskDetail: View {
             VStack(alignment: .leading, spacing: 10) {
                 Label(run?.employee.name ?? store.ownerName(task), systemImage: task.generation != nil ? "wand.and.stars" : "person")
                 Text(run?.workingDirectory ?? task.workingDirectory).font(.system(size: 10, design: .monospaced)).textSelection(.enabled)
-                Button("在Finder中打开工作目录") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: task.workingDirectory) }.buttonStyle(.link)
+                Button("在Finder中打开工作目录") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: task.workingDirectory) }.buttonStyle(.linkPointer)
                 Text("验收标准：\(run?.acceptance ?? task.acceptance)").foregroundStyle(.secondary)
                 if let tool = run?.tool ?? task.toolSnapshot ?? store.employee(task.employeeID).flatMap({ store.tool($0.toolID) }) {
                     Text(tool.remote.map { "服务：" + $0.baseURL + "\n工作流：" + $0.workflowName } ?? "执行：\(tool.executable)").font(.system(size: 10, design: .monospaced)).textSelection(.enabled)
@@ -971,7 +1068,7 @@ struct TaskDetail: View {
                     }
                     Text("超时：\(Int(tool.timeout)) 秒").font(.system(size: 10)).foregroundStyle(.secondary)
                 }
-                if let run { Button("查看完整日志与归档") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: run.logPath)]) }.buttonStyle(.link) }
+                if let run { Button("查看完整日志与归档") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: run.logPath)]) }.buttonStyle(.linkPointer) }
             }.font(.system(size: 11))
             if task.status == .draft, let remote = store.employee(task.employeeID).flatMap({ store.tool($0.toolID) })?.remote {
                 Text("工作流：\(remote.workflowName)\n预算：\(remote.budgetNote)").font(.system(size: 11)).foregroundStyle(.secondary)
@@ -983,38 +1080,38 @@ struct TaskDetail: View {
             HStack {
                 Text("执行日志").font(.system(size: 12, weight: .medium)); Spacer()
                 if task.status == .running { ProgressView().controlSize(.small) }
-                Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(isHistorical ? historicalLog : task.log, forType: .string) } label: { Image(systemName: "doc.on.doc") }.buttonStyle(.plain).help("复制最近日志").accessibilityLabel("复制显示的执行日志")
+                Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(isHistorical ? historicalLog : task.log, forType: .string) } label: { Image(systemName: "doc.on.doc") }.buttonStyle(.plainPointer).help("复制最近日志").accessibilityLabel("复制显示的执行日志")
             }
             ReadOnlyTextView(text: isHistorical ? historicalLog : (task.log.isEmpty ? "任务执行后，真实日志会显示在这里。" : task.log), foregroundColor: NSColor(red: 0.77, green: 0.84, blue: 0.93, alpha: 1), backgroundColor: NSColor(red: 0.17, green: 0.23, blue: 0.20, alpha: 1), accessibilityName: "执行日志")
                 .frame(height: 180).clipShape(RoundedRectangle(cornerRadius: 8))
             if !isHistorical {
                 HStack {
                     if task.status == .draft { Button("执行任务") { store.run(task.id) }.buttonStyle(StudioPrimaryButtonStyle()).disabled(!store.storageAvailable) }
-                    else if task.status == .running || task.status == .queued { Button(task.status == .queued ? "取消排队" : (run?.tool.adapterKind == .comfyUI ? "停止远程任务" : "停止执行与子进程")) { store.cancel(task.id) }.buttonStyle(.bordered).tint(.red) }
+                    else if task.status == .running || task.status == .queued { Button(task.status == .queued ? "取消排队" : (run?.tool.adapterKind == .comfyUI ? "停止远程任务" : "停止执行与子进程")) { store.cancel(task.id) }.buttonStyle(.borderedPointer).tint(.red) }
                     else if task.status == .review && task.purpose != .planning { Button("验收通过") { store.accept(task.id) }.buttonStyle(StudioPrimaryButtonStyle()) }
                     Spacer()
                     if let exit = task.exitCode { Text("exit \(exit)").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary) }
                 }
                 if ![.running, .queued].contains(task.status) {
                     HStack {
-                        if task.planID == nil && task.generation == nil && task.command == nil { Button("编辑任务", action: onEdit).buttonStyle(.bordered) }
-                        Button("删除任务", role: .destructive) { store.pendingDeletion = DeletionTarget(.task, task.id) }.buttonStyle(.bordered)
+                        if task.planID == nil && task.generation == nil && task.command == nil { Button("编辑任务", action: onEdit).buttonStyle(.borderedPointer) }
+                        Button("删除任务", role: .destructive) { store.pendingDeletion = DeletionTarget(.task, task.id) }.buttonStyle(.borderedPointer)
                     }
                 }
-                if task.status == .draft { Button("移出草稿", role: .destructive) { confirmArchive = true }.buttonStyle(.bordered) }
-                if task.generation != nil && ![.draft, .running, .queued].contains(task.status) { Button("用相同参数再运行") { store.rerunGeneration(task.id) }.buttonStyle(.bordered).help("复用这次提交的参数和种子") }
+                if task.status == .draft { Button("移出草稿", role: .destructive) { confirmArchive = true }.buttonStyle(.borderedPointer) }
+                if task.generation != nil && ![.draft, .running, .queued].contains(task.status) { Button("用相同参数再运行") { store.rerunGeneration(task.id) }.buttonStyle(.borderedPointer).help("复用这次提交的参数和种子") }
                 if (task.generation != nil || task.command != nil) && task.status == .completed {
-                    Button("导出到项目文件夹") { if let folder = store.exportOutputs(task.id) { NSWorkspace.shared.activateFileViewerSelecting([folder]) } }.buttonStyle(.bordered)
+                    Button("导出到项目文件夹") { if let folder = store.exportOutputs(task.id) { NSWorkspace.shared.activateFileViewerSelecting([folder]) } }.buttonStyle(.borderedPointer)
                 }
                 if let worktree = task.worktree { WorktreePanel(store: store, task: task, worktree: worktree) }
-                if task.status == .review && task.purpose != .review && task.purpose != .planning && task.planID != nil { Button("重新提交AI审核") { store.requestReviewAgain(task.id) }.buttonStyle(.bordered) }
+                if task.status == .review && task.purpose != .review && task.purpose != .planning && task.planID != nil { Button("重新提交AI审核") { store.requestReviewAgain(task.id) }.buttonStyle(.borderedPointer) }
                 if task.status == .review && task.purpose == .planning {
                     Button("审阅协作计划") { do { planCandidate = try store.planDraft(for: task.id); showPlanApproval = true } catch { store.errorMessage = error.localizedDescription } }.buttonStyle(StudioPrimaryButtonStyle())
                 }
                 if ![.draft, .running, .queued].contains(task.status) {
                     TextField("返工或重试说明", text: $feedback, axis: .vertical).lineLimit(2...3)
-                    if task.status == .interrupted && run?.remotePromptID != nil { Button("查询已有远程执行") { store.resumeRemote(task.id) }.buttonStyle(.bordered) }
-                    Button(task.status == .interrupted ? "已检查旧作业，新建执行" : "新建一次执行") { store.run(task.id, feedback: feedback) }.buttonStyle(.bordered).disabled(!store.storageAvailable)
+                    if task.status == .interrupted && run?.remotePromptID != nil { Button("查询已有远程执行") { store.resumeRemote(task.id) }.buttonStyle(.borderedPointer) }
+                    Button(task.status == .interrupted ? "已检查旧作业，新建执行" : "新建一次执行") { store.run(task.id, feedback: feedback) }.buttonStyle(.borderedPointer).disabled(!store.storageAvailable)
                 }
             }
             ForEach(store.snapshot.reviews.filter { $0.sourceTaskID == task.id }) { review in
@@ -1037,7 +1134,7 @@ struct TaskDetail: View {
                     }
                 }
                 ArtifactList(store: store, runID: run.id)
-                if run.status != .running { Button("导入文件到本次归档") { importFiles(run.id) }.buttonStyle(.bordered) }
+                if run.status != .running { Button("导入文件到本次归档") { importFiles(run.id) }.buttonStyle(.borderedPointer) }
                 if run.status == .completed && task.status == .completed { Button("交给下一位员工") { showHandoff = true }.buttonStyle(StudioPrimaryButtonStyle()) }
             }
         }.font(.system(size: 11))
@@ -1233,7 +1330,7 @@ struct ConfigurationSheet: View {
                         avatarImageData = nil; avatarError = nil
                     } label: {
                         if preset == "initials" { Text("姓名") } else { Image(systemName: preset) }
-                    }.buttonStyle(.bordered).tint(avatarImageData == nil && (avatarSymbol ?? "initials") == preset ? Theme.blue : .secondary)
+                    }.buttonStyle(.borderedPointer).tint(avatarImageData == nil && (avatarSymbol ?? "initials") == preset ? Theme.blue : .secondary)
                         .help(["initials": "姓名首字", "person.fill": "人物", "sparkles": "灵感", "cpu": "开发", "paintpalette.fill": "设计"][preset] ?? "头像预设")
                         .accessibilityLabel(["initials": "姓名首字头像", "person.fill": "人物头像", "sparkles": "灵感头像", "cpu": "开发头像", "paintpalette.fill": "设计头像"][preset] ?? "头像预设")
                         .accessibilityValue(avatarImageData == nil && (avatarSymbol ?? "initials") == preset ? "已选择" : "未选择")

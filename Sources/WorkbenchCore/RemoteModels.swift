@@ -37,15 +37,79 @@ public indirect enum JSONValue: Codable, Equatable, Sendable {
     }
 }
 
+/// How a server's SSH host key is checked. `acceptNew` trusts a host seen for the first time (a rented GPU instance is
+/// often new) but still refuses a key that changed for a known host.
+public enum SSHHostKeyPolicy: String, Codable, CaseIterable, Sendable {
+    case strict, acceptNew
+    public var title: String { self == .strict ? "只接受 known_hosts 中已有的主机" : "首次连接时信任新主机（已知主机换密钥仍会拒绝）" }
+}
+
+/// An SSH tunnel to a ComfyUI server: ComfyUI on the remote side is reached at 127.0.0.1:`localPort` on this Mac.
+/// `hostAlias` is a Host from ~/.ssh/config or a host name or address; user, port and key override the config.
 public struct SSHConnection: Codable, Equatable, Sendable {
     public var hostAlias: String
     public var localPort: Int
     public var remotePort: Int
-    public init(hostAlias: String, localPort: Int = 8189, remotePort: Int = 8188) { self.hostAlias = hostAlias; self.localPort = localPort; self.remotePort = remotePort }
+    public var user: String?
+    public var port: Int?
+    public var identityFile: String?
+    /// Log in with a password kept in the Keychain (answered through SSH_ASKPASS). Otherwise key or ssh-agent only.
+    public var usesPassword: Bool?
+    public var hostKeyPolicy: SSHHostKeyPolicy?
+    /// Where ComfyUI listens as seen from the SSH host; 127.0.0.1 unless it runs on another machine behind it.
+    public var remoteHost: String?
+    public init(hostAlias: String, localPort: Int = 8189, remotePort: Int = 8188, user: String? = nil, port: Int? = nil, identityFile: String? = nil, usesPassword: Bool? = nil, hostKeyPolicy: SSHHostKeyPolicy? = nil, remoteHost: String? = nil) {
+        self.hostAlias = hostAlias; self.localPort = localPort; self.remotePort = remotePort; self.user = user; self.port = port
+        self.identityFile = identityFile; self.usesPassword = usesPassword; self.hostKeyPolicy = hostKeyPolicy; self.remoteHost = remoteHost
+    }
+
+    /// Checks every field before anything reaches ssh. Each value becomes its own argv element; nothing goes through a shell.
+    public func validate() throws {
+        let hostCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._@-")
+        let nameCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        guard !hostAlias.isEmpty, !hostAlias.hasPrefix("-"), hostAlias.unicodeScalars.allSatisfy(hostCharacters.contains) else { throw RemoteError.invalidConfiguration }
+        guard (1024...65535).contains(localPort), (1...65535).contains(remotePort) else { throw RemoteError.invalidConfiguration }
+        if let user { guard !user.isEmpty, !user.hasPrefix("-"), user.unicodeScalars.allSatisfy(nameCharacters.contains) else { throw RemoteError.invalidConfiguration } }
+        if let port { guard (1...65535).contains(port) else { throw RemoteError.invalidConfiguration } }
+        if let identityFile { guard identityFile.hasPrefix("/"), !identityFile.contains("\0") else { throw RemoteError.invalidConfiguration } }
+        if let remoteHost { guard !remoteHost.isEmpty, !remoteHost.hasPrefix("-"), remoteHost.unicodeScalars.allSatisfy(nameCharacters.contains) else { throw RemoteError.invalidConfiguration } }
+    }
+
+    /// Options shared by the tunnel and the login probe.
+    private func options() -> [String] {
+        var result = ["-o", "StrictHostKeyChecking=\(hostKeyPolicy == .acceptNew ? "accept-new" : "yes")", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"]
+        if usesPassword == true {
+            result += ["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=1", "-o", "PreferredAuthentications=publickey,keyboard-interactive,password"]
+        } else { result += ["-o", "BatchMode=yes"] }
+        if let port { result += ["-p", String(port)] }
+        if let identityFile { result += ["-i", identityFile, "-o", "IdentitiesOnly=yes"] }
+        if let user { result += ["-l", user] }
+        return result
+    }
+    /// The tunnel: forward 127.0.0.1:localPort here to remoteHost:remotePort there, and nothing else.
     public func arguments() throws -> [String] {
-        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._@-")
-        guard !hostAlias.isEmpty, !hostAlias.hasPrefix("-"), hostAlias.unicodeScalars.allSatisfy(allowed.contains), (1024...65535).contains(localPort), (1...65535).contains(remotePort) else { throw RemoteError.invalidConfiguration }
-        return ["-N", "-T", "-L", "127.0.0.1:\(localPort):127.0.0.1:\(remotePort)", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=30", hostAlias]
+        try validate()
+        return ["-N", "-T", "-L", "127.0.0.1:\(localPort):\(remoteHost ?? "127.0.0.1"):\(remotePort)", "-o", "ExitOnForwardFailure=yes"] + options() + [hostAlias]
+    }
+    /// A login check without a tunnel: runs `true` on the host.
+    public func probeArguments() throws -> [String] {
+        try validate()
+        return ["-T"] + options() + [hostAlias, "true"]
+    }
+
+    /// What ssh's error output means for the user, in the terms they can act on.
+    public static func diagnose(_ output: String) -> String {
+        let text = output.lowercased()
+        if text.contains("remote host identification has changed") { return "服务器的 SSH 主机密钥变了。云主机重装或换了 IP 后会这样；确认无误后，在终端运行 ssh-keygen -R <主机> 删除旧记录再连接。" }
+        if text.contains("host key verification failed") || text.contains("no matching host key") { return "这台主机还不在 known_hosts 中。可以在服务器设置里选择“首次连接时信任新主机”，或先在终端用 ssh 连接一次。" }
+        if text.contains("permission denied") { return "SSH 认证失败：用户名、私钥或密码不对，或者服务器不接受这种登录方式。" }
+        if text.contains("could not resolve hostname") { return "无法解析主机名。请检查主机地址或 ~/.ssh/config 中的别名。" }
+        if text.contains("forwarding failed") || text.contains("connect_to") || text.contains("open failed") { return "SSH 已连上，但转发到 ComfyUI 端口失败：ComfyUI 可能还没启动，或者端口不对。" }
+        if text.contains("connection refused") { return "SSH 端口拒绝连接：云主机可能还没有启动完成，或者端口不对。" }
+        if text.contains("timed out") || text.contains("operation timed out") { return "连接 SSH 超时：云主机可能已关机，或网络不通。" }
+        if text.contains("address already in use") || text.contains("cannot listen to port") { return "本机端口已被占用。请在服务器设置里换一个本机端口。" }
+        let last = output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty } ?? "没有输出"
+        return "SSH 连接失败：" + last
     }
 }
 

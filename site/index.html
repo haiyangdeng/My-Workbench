@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workbench — your one-person AI studio for macOS</title>
+  <meta name="description" content="Workbench is a free, open-source Mac app that brings your AI tools into one studio. Bring Codex, Claude Code or any CLI, give them roles, and run code, video, audio and design work from one place.">
+  <meta name="theme-color" content="#080B1E">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Workbench — your one-person AI studio">
+  <meta property="og:description" content="Bring your own AI tools, give them roles, and run a studio for code, video, audio and design on your Mac. Free and open source.">
+  <meta property="og:image" content="https://haiyangdeng.github.io/My-Workbench/assets/screens/home-pixel.jpg">
+  <meta property="og:url" content="https://haiyangdeng.github.io/My-Workbench/">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="apple-touch-icon" href="assets/icon-512.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="#top" aria-label="Workbench home">
+        <img src="assets/icon-512.png" alt="" width="36" height="36">
+        <span>Workbench</span>
+      </a>
+      <nav aria-label="Sections">
+        <ul>
+          <li><a href="#workspaces">Workspaces</a></li>
+          <li><a href="#agents">AI team</a></li>
+          <li><a href="#media">Media</a></li>
+          <li><a href="#install">Install</a></li>
+          <li><a href="https://github.com/haiyangdeng/My-Workbench">GitHub</a></li>
+        </ul>
+      </nav>
+      <a class="btn btn-small btn-primary" href="https://github.com/haiyangdeng/My-Workbench/releases/download/v1.0.0/Workbench-1.0.0.dmg">Download</a>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <p class="kicker"><span class="dot"></span> Version 1.0 · free &amp; open source</p>
+          <h1>Your <span class="nowrap">one-person</span> AI studio</h1>
+          <p class="prompt" aria-label="Make room for ideas">&gt; make room for ideas<span class="caret" aria-hidden="true">_</span></p>
+          <p class="lede">Workbench puts your AI tools in one native Mac app. Bring Codex, Claude Code or any command-line agent, give each one a role, and run code, video, audio and design work from a single studio on your own machine.</p>
+          <div class="cta">
+            <a class="btn btn-primary" href="https://github.com/haiyangdeng/My-Workbench/releases/download/v1.0.0/Workbench-1.0.0.dmg">
+              <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M7 1h2v8h2v-2h2v2h-2v2h-2v2H7v-2H5v-2H3V7h2v2h2z M2 13h12v2H2z"/></svg>
+              Download for macOS
+            </a>
+            <a class="btn" href="https://github.com/haiyangdeng/My-Workbench">View source on GitHub</a>
+          </div>
+          <p class="fine">v1.0.0 · macOS 14 Sonoma or later · Apple Silicon and Intel · MIT License</p>
+        </div>
+        <div class="hero-art px">
+          <img src="assets/art/hero.jpg" alt="Pixel-art illustration of a glowing sphere marked AI, surrounded by floating screens" width="1700" height="721">
+        </div>
+      </div>
+    </section>
+
+    <section class="showcase" aria-label="Screenshot">
+      <div class="wrap">
+        <figure class="window px">
+          <div class="titlebar" aria-hidden="true"><i></i><i></i><i></i><span>Workbench — 我的 AI 工作室</span></div>
+          <img src="assets/screens/home-pixel.jpg" alt="Workbench home in the pixel style: four workspace cards for video, audio, code and design, each with its AI team and tasks" width="1440" height="900" loading="lazy">
+        </figure>
+        <p class="caption">The studio home: four workspaces, the people on each, and what is waiting for your review. Shown in the Pixel look.</p>
+      </div>
+    </section>
+
+    <section id="workspaces" class="section">
+      <div class="wrap">
+        <p class="kicker">01 · Workspaces</p>
+        <h2>Four studios in one window</h2>
+        <p class="intro">Each workspace has its own AI team, tasks and projects. Add your own workspaces too, with a name, icon and color.</p>
+        <ul class="cards">
+          <li class="card px" style="--accent: var(--orange)">
+            <img src="assets/art/video.jpg" alt="" loading="lazy" width="1100" height="822">
+            <h3>Video</h3>
+            <p>Storyboards, keyframes and edits. A director agent plans shots and runs them on your GPU.</p>
+          </li>
+          <li class="card px" style="--accent: var(--purple)">
+            <img src="assets/art/audio.jpg" alt="" loading="lazy" width="1100" height="730">
+            <h3>Audio</h3>
+            <p>Voiceover, sound design and music workflows, with waveform previews of every take.</p>
+          </li>
+          <li class="card px" style="--accent: var(--cyan)">
+            <img src="assets/art/code.jpg" alt="" loading="lazy" width="1100" height="730">
+            <h3>Code</h3>
+            <p>Agents that read and edit your git projects, show the changed files and their diffs, and never write without your say-so.</p>
+          </li>
+          <li class="card px" style="--accent: var(--green)">
+            <img src="assets/art/design.jpg" alt="" loading="lazy" width="1100" height="730">
+            <h3>Design</h3>
+            <p>Key art, posters and variations. Compare images side by side and keep the ones you like.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="agents" class="section split">
+      <div class="wrap split-grid">
+        <div>
+          <p class="kicker">02 · Your AI team</p>
+          <h2>Bring your own AI, give it a job</h2>
+          <p class="intro">Nothing is built in. Add any command-line agent by hand (Codex, Claude Code or your own), then hire it as an “AI employee” with a role, instructions and an access level.</p>
+          <ul class="checks">
+            <li><b>Chat in projects.</b> Replies stream in, tool activity is listed, and every turn continues the agent's own session.</li>
+            <li><b>Read-only or Edit.</b> You choose per agent and per message. Edit turns list the changed files with a diff.</li>
+            <li><b>Team mode.</b> A lead agent splits the work, you edit and approve the plan, and steps run in order, one writer per folder.</li>
+            <li><b>Reviews.</b> A reviewer agent checks each step against its acceptance criteria, with the diff as evidence.</li>
+            <li><b>Stay in control.</b> Queue, stop or retry any turn, or continue the same session in the built-in terminal.</li>
+          </ul>
+        </div>
+        <figure class="window px">
+          <div class="titlebar" aria-hidden="true"><i></i><i></i><i></i><span>Team plan</span></div>
+          <img src="assets/screens/team-plan.jpg" alt="A project conversation: an agent's earlier fix with its changed files, then a lead agent's three-step plan waiting for approval" width="1440" height="900" loading="lazy">
+        </figure>
+      </div>
+    </section>
+
+    <section id="media" class="section split reverse">
+      <div class="wrap split-grid">
+        <div>
+          <p class="kicker">03 · Media studio</p>
+          <h2>Direct your own GPU</h2>
+          <p class="intro">Connect ComfyUI on a GPU you rent by the hour. A director agent turns a brief into a production plan, and nothing is submitted until you approve the plan and its budget.</p>
+          <ul class="checks">
+            <li><b>On-demand servers.</b> SSH by key or by a password kept in the Keychain. Start and stop commands, a connection test, and tunnels that reconnect on their own.</li>
+            <li><b>Templates.</b> Import any API-format workflow and choose which inputs the director may set.</li>
+            <li><b>Budgets.</b> Caps in GPU minutes or money. The plan pauses before a job would go over.</li>
+            <li><b>Reviews.</b> The director looks at the image or the keyframes and asks for a rework with new settings when needed.</li>
+          </ul>
+        </div>
+        <figure class="window px">
+          <div class="titlebar" aria-hidden="true"><i></i><i></i><i></i><span>Production plan</span></div>
+          <img src="assets/screens/director-plan.jpg" alt="A director's seven-step production plan for a launch teaser, with keyframe and animation jobs on a rented GPU and an estimated cost" width="1440" height="900" loading="lazy">
+        </figure>
+      </div>
+    </section>
+
+    <section id="looks" class="section">
+      <div class="wrap">
+        <p class="kicker">04 · Looks</p>
+        <h2>Three looks, one click</h2>
+        <ul class="looks">
+          <li>
+            <figure class="px"><img src="assets/screens/home-ink.jpg" alt="Workbench in the Ink look: deep navy with glowing artwork" loading="lazy" width="1440" height="900"></figure>
+            <p><b>Ink</b> · the default dark look</p>
+          </li>
+          <li>
+            <figure class="px"><img src="assets/screens/home-pixel.jpg" alt="Workbench in the Pixel look: indigo night, arcade colors and pixel artwork" loading="lazy" width="1440" height="900"></figure>
+            <p><b>Pixel</b> · arcade night, stepped corners</p>
+          </li>
+          <li>
+            <figure class="px"><img src="assets/screens/home-paper.jpg" alt="Workbench in the Paper look: light blue and white" loading="lazy" width="1440" height="900"></figure>
+            <p><b>Paper</b> · light and airy</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="local" class="section">
+      <div class="wrap">
+        <p class="kicker">05 · Local-first</p>
+        <h2>Your studio stays on your Mac</h2>
+        <ul class="tiles">
+          <li class="px"><h3>No account</h3><p>No sign-up and no telemetry. Workbench only talks to the CLIs and servers you set up yourself.</p></li>
+          <li class="px"><h3>Your data</h3><p>Projects, conversations and runs live in a local database, with a backup before every upgrade.</p></li>
+          <li class="px"><h3>Your keys</h3><p>Tokens, SSH passwords and secret variables go to the macOS Keychain, never into files or exports.</p></li>
+          <li class="px"><h3>Your logins</h3><p>Each CLI runs with its own sign-in on your machine. Media jobs go only to the servers you add.</p></li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="install" class="section">
+      <div class="wrap install">
+        <div>
+          <p class="kicker">06 · Install</p>
+          <h2>Get started in a minute</h2>
+          <ol class="steps">
+            <li><span class="num">1</span><div><b>Download</b> <a href="https://github.com/haiyangdeng/My-Workbench/releases/download/v1.0.0/Workbench-1.0.0.dmg">Workbench-1.0.0.dmg</a>, open it and drag Workbench to Applications.</div></li>
+            <li><span class="num">2</span><div><b>Open it the first time.</b> This build is not notarized by Apple yet, so macOS stops the first launch. Open <i>System Settings → Privacy &amp; Security</i> and click <i>Open Anyway</i>, or run this once in Terminal:
+              <div class="code px"><code id="xattr">xattr -dr com.apple.quarantine /Applications/Workbench.app</code><button class="copy" type="button" data-copy="xattr">Copy</button></div></div></li>
+            <li><span class="num">3</span><div><b>Add a CLI.</b> In 工具连接, add the CLI you already use, such as Codex or Claude Code. <a href="https://github.com/haiyangdeng/My-Workbench/tree/main/docs/cli-examples">Example definitions</a> are ready to import.</div></li>
+          </ol>
+        </div>
+        <aside class="specs px" aria-label="Requirements">
+          <h3>Requirements</h3>
+          <dl>
+            <dt>macOS</dt><dd>14 Sonoma or later</dd>
+            <dt>Chip</dt><dd>Apple Silicon or Intel (universal)</dd>
+            <dt>Interface</dt><dd>Simplified Chinese</dd>
+            <dt>AI tools</dt><dd>At least one CLI agent you can sign in to, such as Codex or Claude Code</dd>
+            <dt>Media</dt><dd>Optional: a ComfyUI server, local or on a rented GPU</dd>
+            <dt>License</dt><dd>MIT, free for any use</dd>
+          </dl>
+          <a class="btn btn-primary btn-block" href="https://github.com/haiyangdeng/My-Workbench/releases/download/v1.0.0/Workbench-1.0.0.dmg">Download v1.0.0</a>
+          <p class="fine"><a href="https://github.com/haiyangdeng/My-Workbench/releases">All releases and checksums</a></p>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-inner">
+      <p><img src="assets/icon-512.png" alt="" width="24" height="24"> Workbench 1.0.0 · <a href="https://github.com/haiyangdeng/My-Workbench/blob/main/LICENSE">MIT License</a></p>
+      <p><a href="https://github.com/haiyangdeng/My-Workbench">Source</a> · <a href="https://github.com/haiyangdeng/My-Workbench/releases">Releases</a> · <a href="https://github.com/haiyangdeng/My-Workbench/issues">Report an issue</a></p>
+      <p class="fine">ONE PERSON × AI TEAM</p>
+    </div>
+  </footer>
+  <script src="main.js" defer></script>
+</body>
+</html>

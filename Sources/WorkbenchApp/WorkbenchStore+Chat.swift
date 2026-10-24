@@ -1,6 +1,16 @@
 import Foundation
 
 /// What a running turn or step has said so far.
+/// The templates and servers a director may use (MD-16).
+struct DirectorScope: Equatable {
+    var templateIDs: Set<UUID>
+    var serverIDs: Set<UUID>
+    /// Current, enabled entries in a stable order.
+    @MainActor func resolved(in store: WorkbenchStore) -> (templates: [WorkflowTemplate], servers: [ComfyServer]) {
+        (store.snapshot.templates.current.filter { templateIDs.contains($0.id) }, store.enabledServers.filter { serverIDs.contains($0.id) })
+    }
+}
+
 struct LiveTurn: Equatable {
     var text = ""
     var activities: [CLIActivity] = []
@@ -81,7 +91,7 @@ extension WorkbenchStore {
     /// Adds the user's message and one queued turn per agent (or a planning turn for the lead in team mode).
     /// Returns the conversation ID, or nil with errorMessage set. Nothing is sent if any agent cannot run.
     @discardableResult
-    func sendMessage(_ text: String, attachments: [String] = [], projectID: UUID, conversationID: UUID?, agentIDs: [UUID], mode: ChatMode, access: AccessLevel) -> UUID? {
+    func sendMessage(_ text: String, attachments: [String] = [], projectID: UUID, conversationID: UUID?, agentIDs: [UUID], mode: ChatMode, access: AccessLevel, directorScope: DirectorScope? = nil) -> UUID? {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard storageAvailable, !body.isEmpty || !attachments.isEmpty else { return nil }
         guard let project = project(projectID) else { errorMessage = "请先选择一个项目。"; return nil }
@@ -96,6 +106,8 @@ extension WorkbenchStore {
         if effectiveMode == .director {
             guard agents.count == 1 else { errorMessage = "导演模式只选一位员工担任导演。"; return nil }
             guard !snapshot.templates.current.isEmpty, !enabledServers.isEmpty else { errorMessage = "导演模式需要至少一个工作流模板和一台可用的服务器。请先在“工具连接”中添加。"; return nil }
+            let scope = (directorScope ?? defaultDirectorScope(projectID: projectID)).resolved(in: self)
+            guard !scope.templates.isEmpty, !scope.servers.isEmpty else { errorMessage = "导演可用的范围里至少要有一个模板和一台已启用的服务器。"; return nil }
         }
         for agent in agents {
             guard let tool = tool(agent.toolID), tool.isEnabled, tool.isCLI else { errorMessage = "「\(agent.name)」没有绑定可用的 CLI。"; return nil }
@@ -112,6 +124,11 @@ extension WorkbenchStore {
         user.attachments = attachments.isEmpty ? nil : attachments
         user.targetIDs = agents.map(\.id); user.mode = effectiveMode; user.access = access
         user.leadID = effectiveMode == .team || effectiveMode == .director ? agents[0].id : nil
+        if effectiveMode == .director {
+            // The scope used is recorded on the message, so a later look at the plan shows what the director could choose from.
+            let scope = (directorScope ?? defaultDirectorScope(projectID: projectID)).resolved(in: self)
+            user.directorTemplateIDs = scope.templates.map(\.id); user.directorServerIDs = scope.servers.map(\.id)
+        }
         let turnAgents = effectiveMode == .team ? [agents[0]] : agents
         let turns = turnAgents.enumerated().map { index, agent -> ChatMessage in
             var turn = ChatMessage(conversationID: conversation.id, role: .agent, text: "", createdAt: now.addingTimeInterval(Double(index + 1) / 1000))
@@ -222,7 +239,7 @@ extension WorkbenchStore {
             run.model = (model?.isEmpty ?? true) ? nil : model
             var schemaText: String?, schemaURL: URL?
             if turn.turnKind == .planning || turn.turnKind == .production {
-                let schema = try turn.turnKind == .planning ? CollaborationSchema.plan(employeeIDs: user.targetIDs ?? []) : productionSchema(director: agent)
+                let schema = try turn.turnKind == .planning ? CollaborationSchema.plan(employeeIDs: user.targetIDs ?? []) : productionSchema(director: agent, user: user)
                 schemaURL = directory.appendingPathComponent("response-schema.json")
                 try schema.write(to: schemaURL!, options: .atomic)
                 schemaText = String(decoding: schema, as: UTF8.self)
@@ -250,10 +267,14 @@ extension WorkbenchStore {
                 var status: WorkStatus = .failed, exit: Int32?
                 var summary = CLIOutputSummary()
                 // CH-11: for Edit turns in a git project, compare git status before and after.
-                let gitBefore = level == .edit ? await gitStatus(run.workingDirectory) : nil
-                do {
+                let baseline = level == .edit ? await changeBaseline(run.workingDirectory) : nil
+                if await confirmLogin(tool) == .loggedOut {
+                    // TurnDiagnosis turns this into the "log in first" message.
+                    summary.errorMessage = "Not logged in"; log.append("\n[system] CLI 没有登录，没有启动。\n")
+                } else { do {
                     let collector = CLIOutputCollector(format: tool.format) { buffer.handle($0) }
                     var environment = await environmentAfterLookup(for: tool)
+                    if let note = Self.environmentNote(environment) { log.append(note) }
                     environment["MYWORKBENCH_OUTPUT_DIR"] = run.outputDirectory; environment["MYWORKBENCH_RUN_ID"] = runID.uuidString
                     let result = try await runner.run(id: runID, tool: tool, input: prompt, directory: run.workingDirectory, arguments: run.arguments, environment: environment, onOutput: { chunk in
                         log.append(chunk); tail.append(chunk.text)
@@ -263,10 +284,10 @@ extension WorkbenchStore {
                     summary = collector.finish()
                     recordOutput(summary, runID: runID, outputDirectory: run.outputDirectory, format: tool.format, structured: structured, log: log)
                     log.append("\n[system] 退出码 \(result.exitCode) · \(result.status.title)\n")
-                } catch { log.append("\n[system] \(error.localizedDescription)\n"); tail.append(error.localizedDescription) }
+                } catch { log.append("\n[system] \(error.localizedDescription)\n"); tail.append(error.localizedDescription) } }
                 refresher.cancel()
                 var changed: [String]?
-                if let gitBefore { changed = GitRepository.changedFiles(before: gitBefore, after: await gitStatus(run.workingDirectory) ?? gitBefore) }
+                if let baseline { changed = await changedFiles(since: baseline, directory: run.workingDirectory) }
                 let live = buffer.take() ?? liveTurns[id]
                 try? log.close()
                 finishTurn(id, runID: runID, status: status, exit: exit, summary: summary, tail: tail.text, live: live, tool: tool, sessionID: sessionID, changedFiles: changed)
@@ -427,13 +448,30 @@ extension WorkbenchStore {
     /// Agents a director may hand writing or analysis steps to: every enabled agent whose CLI can run.
     private var directorRoster: [Employee] { snapshot.employees.current.filter { ($0.enabled ?? true) && (tool($0.toolID)?.isCLI ?? false) && (tool($0.toolID)?.isEnabled ?? false) } }
 
-    func productionSchema(director: Employee) throws -> Data {
+    /// MD-16 default: the templates of the project's modules (all templates when none match), and the enabled servers whose
+    /// last check did not fail. An on-demand server that has not been checked yet still counts; it is started before jobs run.
+    func defaultDirectorScope(projectID: UUID?) -> DirectorScope {
+        let modules = Set(project(projectID)?.moduleIDs ?? [])
+        let matching = snapshot.templates.current.filter { !modules.isDisjoint(with: $0.moduleIDs) }
+        let templates = matching.isEmpty ? snapshot.templates.current : matching
+        let servers = enabledServers.filter { serverHealth[$0.id]?.usable != false }
+        return DirectorScope(templateIDs: Set(templates.map(\.id)), serverIDs: Set((servers.isEmpty ? enabledServers : servers).map(\.id)))
+    }
+    /// The scope recorded on a director message; older messages without one use everything, as before.
+    func directorScope(for user: ChatMessage) -> (templates: [WorkflowTemplate], servers: [ComfyServer]) {
+        let scope = DirectorScope(templateIDs: Set(user.directorTemplateIDs ?? snapshot.templates.current.map(\.id)), serverIDs: Set(user.directorServerIDs ?? enabledServers.map(\.id)))
+        return scope.resolved(in: self)
+    }
+
+    func productionSchema(director: Employee, user: ChatMessage) throws -> Data {
         var roster = directorRoster.map(\.id); if !roster.contains(director.id) { roster.insert(director.id, at: 0) }
-        return try CollaborationSchema.production(employeeIDs: roster, templateIDs: snapshot.templates.current.map(\.id), serverIDs: enabledServers.map(\.id), toolIDs: commandTools.map(\.id))
+        let scope = directorScope(for: user)
+        return try CollaborationSchema.production(employeeIDs: roster, templateIDs: scope.templates.map(\.id), serverIDs: scope.servers.map(\.id), toolIDs: commandTools.map(\.id))
     }
 
     func directorPrompt(user: ChatMessage, director: Employee, project: WorkProject) -> String {
-        let catalog = snapshot.templates.current.map { template -> String in
+        let scope = directorScope(for: user)
+        let catalog = scope.templates.map { template -> String in
             let modules = template.moduleIDs.compactMap { id in workspaces.first { $0.id == id }?.name }.joined(separator: "、")
             let parameters = template.parameters.map { parameter -> String in
                 var limits: [String] = []
@@ -445,7 +483,7 @@ extension WorkbenchStore {
             let outputs = template.outputs.map(\.kind.title).joined(separator: "、")
             return "· 模板 id=\(template.id.uuidString)：\(template.name)（工作区：\(modules.isEmpty ? "未指定" : modules)；输出：\(outputs.isEmpty ? "未声明" : outputs)）\(template.description.isEmpty ? "" : "\n  说明：" + template.description)\n\(parameters)"
         }.joined(separator: "\n")
-        let servers = enabledServers.map { server -> String in
+        let servers = scope.servers.map { server -> String in
             let health = serverHealth[server.id]
             return "· 服务器 id=\(server.id.uuidString)：\(server.name)\(server.hourlyPrice.map { "，约 \($0) \(server.currency ?? "") / 小时" } ?? "，价格未知")\(health?.gpu.map { "，GPU \($0)" } ?? "")"
         }.joined(separator: "\n")
@@ -523,6 +561,7 @@ extension WorkbenchStore {
         guard !project.isArchived else { errorMessage = Self.archivedProjectMessage; return nil }
         let attachments = user.attachments ?? []
         do {
+            try BudgetCap.validate(minutes: budgetMinutes, cost: budgetCost, hasGenerateSteps: draft.steps.contains { $0.stepKind == .generate })
             try draft.validate(workspace: snapshot)
             try snapshot.validateProduction(draft, attachments: attachments)
         } catch { errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription; return nil }
@@ -558,7 +597,7 @@ extension WorkbenchStore {
         }
         var plan = CollaborationPlan(id: planID, projectID: project.id, title: draft.title, goal: draft.goal, taskIDs: tasks.map(\.id), reviewerID: nil, maximumReworks: maximumReworks)
         plan.kind = .production; plan.conversationID = conversation.id; plan.leadID = directorID
-        plan.budgetMinutes = budgetMinutes.flatMap { $0 > 0 ? $0 : nil }; plan.budgetCost = budgetCost.flatMap { $0 > 0 ? $0 : nil }
+        plan.budgetMinutes = budgetMinutes; plan.budgetCost = budgetCost
         plan.directorReview = directorReview; plan.spentSeconds = 0; plan.spentCost = 0
         guard change({ snapshot in
             snapshot.plans.append(plan); snapshot.tasks.insert(contentsOf: tasks, at: 0)

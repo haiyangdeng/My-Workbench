@@ -31,6 +31,10 @@ extension WorkbenchStore {
         }
         guard manageObjects({ try $0.deleteObject(target) }) else { return false }
         if target.kind == .project && activeProjectID == target.objectID { activeProjectID = activeProjects.first?.id }
+        if target.kind == .server { try? Self.sshPasswordVault.remove(toolID: target.objectID); serverTests.removeValue(forKey: target.objectID); serverCommands.removeValue(forKey: target.objectID) }
+        if target.kind == .tool, let deleted = snapshot.tools.first(where: { $0.id == target.objectID }) {
+            for name in deleted.secretEnvironmentNames ?? [] { try? CredentialVault.cliEnvironment.remove(account: CredentialVault.account(toolID: deleted.id, name: name)) }
+        }
         if target.kind == .tool || target.kind == .server {
             disconnectTunnel(target.objectID)
             serverHealth.removeValue(forKey: target.objectID)

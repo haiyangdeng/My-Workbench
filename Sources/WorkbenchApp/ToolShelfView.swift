@@ -18,6 +18,7 @@ struct ToolShelfView: View {
     var onRunTemplate: (WorkflowTemplate) -> Void = { _ in }
     var onImportCLI: () -> Void = {}
     var onExportCLI: (ToolConfig) -> Void = { _ in }
+    @State private var confirmStopServer: ComfyServer?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 19) {
@@ -34,24 +35,28 @@ struct ToolShelfView: View {
             ForEach(store.cliTools) { tool in cliCard(tool) }
             HStack {
                 if store.hasCLI { Button("添加 CLI", action: onAddCLI).buttonStyle(StudioPrimaryButtonStyle()).disabled(!store.storageAvailable).accessibilityIdentifier("tools.add-cli") }
-                Button("导入 CLI 定义…", action: onImportCLI).buttonStyle(.bordered).disabled(!store.storageAvailable)
-                Button("安排新员工", action: onAddEmployee).buttonStyle(.bordered).disabled(store.snapshot.tools.current.isEmpty || !store.storageAvailable)
+                Button("导入 CLI 定义…", action: onImportCLI).buttonStyle(.borderedPointer).disabled(!store.storageAvailable)
+                Button("安排新员工", action: onAddEmployee).buttonStyle(.borderedPointer).disabled(store.snapshot.tools.current.isEmpty || !store.storageAvailable)
             }
             Divider().padding(.vertical, 6)
             Text("制作服务器").font(.system(size: 18, weight: .semibold))
             Text("运行 ComfyUI 的服务器（影像、声音、视觉工作区使用）。导演只能使用这里启用、并通过检测的服务器。").font(.system(size: 12)).foregroundStyle(.secondary)
             ForEach(store.snapshot.servers.current) { server in serverCard(server) }
-            Button("添加服务器", action: onAddServer).buttonStyle(.bordered).disabled(!store.storageAvailable).accessibilityIdentifier("tools.add-server")
+            Button("添加服务器", action: onAddServer).buttonStyle(.borderedPointer).disabled(!store.storageAvailable).accessibilityIdentifier("tools.add-server")
             Text("工作流模板").font(.system(size: 18, weight: .semibold)).padding(.top, 8)
             Text("从 ComfyUI 导出的 API 格式工作流，开放的参数可以手动填写，也可以交给导演。").font(.system(size: 12)).foregroundStyle(.secondary)
             ForEach(store.snapshot.templates.current) { template in templateCard(template) }
-            Button("导入工作流模板", action: onAddTemplate).buttonStyle(.bordered).disabled(!store.storageAvailable).accessibilityIdentifier("tools.add-template")
+            Button("导入工作流模板", action: onAddTemplate).buttonStyle(.borderedPointer).disabled(!store.storageAvailable).accessibilityIdentifier("tools.add-template")
             if store.snapshot.tools.current.contains(where: { !$0.isCLI }) {
                 Text("旧版 ComfyUI 工具").font(.system(size: 13, weight: .semibold)).padding(.top, 6)
                 Text("已自动转换为上面的服务器和模板；旧的员工和任务仍按原方式运行。").font(.system(size: 10)).foregroundStyle(.secondary)
                 ForEach(store.snapshot.tools.current.filter { !$0.isCLI }) { tool in remoteCard(tool) }
             }
         }
+        .confirmationDialog("服务器上还有任务在运行", isPresented: Binding(get: { confirmStopServer != nil }, set: { if !$0 { confirmStopServer = nil } }), titleVisibility: .visible) {
+            Button("仍然停止服务器", role: .destructive) { if let server = confirmStopServer { store.runServerCommand(server.id, start: false) }; confirmStopServer = nil }
+            Button("取消", role: .cancel) { confirmStopServer = nil }
+        } message: { Text("停止后正在运行的生成任务会中断，已提交的任务不会自动重新提交。") }
     }
 
     private func cliCard(_ tool: ToolConfig) -> some View {
@@ -139,7 +144,31 @@ struct ToolShelfView: View {
                 if let health { chip(health.error != nil ? "无法连接" : (health.supportsJobCancel ? "可用" : "缺少单任务取消"), color: health.usable ? accent : .orange) }
                 else { chip(server.enabled ? "待检测" : "已停用", color: .secondary) }
             }
-            Text(server.ssh.map { "SSH \($0.hostAlias) → 本机 \($0.localPort)" } ?? server.baseURL).font(.system(size: 10, design: .monospaced)).textSelection(.enabled)
+            Text(server.ssh.map { ssh in "SSH " + [ssh.user.map { $0 + "@" }, ssh.hostAlias, ssh.port.map { ":\($0)" }].compactMap { $0 }.joined() + " → 本机 \(ssh.localPort)" + (ssh.usesPassword == true ? " · 密码登录" : "") } ?? server.baseURL)
+                .font(.system(size: 10, design: .monospaced)).textSelection(.enabled)
+            if server.ssh != nil, let state = store.tunnelStates[server.id] {
+                switch state {
+                case .connecting: Label("SSH 隧道连接中…", systemImage: "arrow.triangle.2.circlepath").font(.system(size: 10)).foregroundStyle(.secondary)
+                case .open: Label("SSH 隧道已连接", systemImage: "lock.fill").font(.system(size: 10)).foregroundStyle(accent)
+                case .failed(let reason): Label(reason, systemImage: "exclamationmark.triangle.fill").font(.system(size: 10)).foregroundStyle(.orange).lineLimit(3)
+                }
+            }
+            if let command = store.serverCommands[server.id] {
+                HStack(spacing: 6) {
+                    if command.running || command.waiting { ProgressView().controlSize(.mini) }
+                    Text((command.running || command.waiting ? "" : "上次操作：") + command.message).font(.system(size: 10)).foregroundStyle(command.succeeded == false ? .orange : .secondary)
+                    if command.waiting { Button("不再等待") { store.cancelServerWait(server.id) }.buttonStyle(.linkPointer).font(.system(size: 10)) }
+                }
+                if !command.output.isEmpty && command.succeeded == false { Text(String(command.output.suffix(600))).font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary).lineLimit(6).textSelection(.enabled) }
+            }
+            if let test = store.serverTests[server.id] {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(test.steps) { step in
+                        Label(step.title + "：" + step.detail, systemImage: step.passed ? "checkmark.circle.fill" : "xmark.circle.fill").font(.system(size: 10)).foregroundStyle(step.passed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
+                    }
+                    if test.running { Label("正在测试…", systemImage: "hourglass").font(.system(size: 10)).foregroundStyle(.secondary) }
+                }.accessibilityIdentifier("tools.server.test." + server.id.uuidString)
+            }
             Text([server.hourlyPrice.map { "约 \($0) \(server.currency ?? "") / 小时" } ?? "价格未知", "同时 \(server.jobLimit) 个任务", "下载上限 \(server.maximumDownloadBytes / 1_048_576) MB"].joined(separator: " · ")).font(.system(size: 10)).foregroundStyle(.secondary)
             if let health {
                 if let error = health.error { Text(error).font(.system(size: 10)).foregroundStyle(.orange).lineLimit(3) }
@@ -151,8 +180,13 @@ struct ToolShelfView: View {
             }
             HStack {
                 Button("编辑") { onEditServer(server) }
-                Button(store.probingTools.contains(server.id) ? "检测中…" : "检测") { store.checkServer(server.id) }.disabled(store.probingTools.contains(server.id))
+                Button(store.serverTests[server.id]?.running == true ? "测试中…" : "测试连接") { store.testServer(server.id) }.disabled(store.serverTests[server.id]?.running == true)
                 if server.ssh != nil { Button(store.tunnelTools.contains(server.id) ? "断开 SSH 隧道" : "连接 SSH 隧道") { if store.tunnelTools.contains(server.id) { store.disconnectTunnel(server.id) } else { store.connectTunnel(server.id) } } }
+                if server.startCommand != nil { Button("启动") { store.runServerCommand(server.id, start: true) }.disabled(store.serverCommands[server.id]?.running == true || store.serverCommands[server.id]?.waiting == true) }
+                if server.stopCommand != nil {
+                    Button("停止") { if store.activeGenerations(on: server.id) > 0 { confirmStopServer = server } else { store.runServerCommand(server.id, start: false) } }
+                        .disabled(store.serverCommands[server.id]?.running == true)
+                }
                 Button(server.enabled ? "停用" : "启用") { var updated = server; updated.enabled.toggle(); store.saveServer(updated, token: nil) }
                 Button("删除", role: .destructive) { store.pendingDeletion = DeletionTarget(.server, server.id) }
             }.font(.system(size: 10))

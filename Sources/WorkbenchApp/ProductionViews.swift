@@ -37,7 +37,7 @@ struct ProductionApprovalSheet: View {
                 Text("估算只供参考；服务端的实际计费由服务商决定。").font(.system(size: 10)).foregroundStyle(.secondary)
                 Spacer()
                 Button("稍后再看") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("确认并启动") { approve() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                Button("确认并启动") { approve() }.buttonStyle(.borderedProminentPointer).keyboardShortcut(.defaultAction)
             }
         }.padding(28).frame(width: 760, height: 780)
             .onAppear {
@@ -106,10 +106,10 @@ struct ProductionApprovalSheet: View {
     }
 
     private func approve() {
-        let minutes = Double(budgetMinutes.trimmingCharacters(in: .whitespaces)), cost = Double(budgetCost.trimmingCharacters(in: .whitespaces))
-        if (!budgetMinutes.isEmpty && minutes == nil) || (!budgetCost.isEmpty && cost == nil) { issue = "预算需要是数字。"; return }
-        if minutes == nil && cost == nil { issue = "请至少设置一个预算上限（GPU 分钟或费用）。"; return }
-        if store.approveProductionPlan(messageID: turnID, draft: draft, budgetMinutes: minutes, budgetCost: cost, directorReview: directorReview, maximumReworks: maximumReworks) != nil { dismiss() }
+        let caps: (minutes: Double?, cost: Double?)
+        do { caps = try BudgetCap.parse(minutes: budgetMinutes, cost: budgetCost, hasGenerateSteps: draft.steps.contains { $0.stepKind == .generate }) }
+        catch { issue = error.localizedDescription; return }
+        if store.approveProductionPlan(messageID: turnID, draft: draft, budgetMinutes: caps.minutes, budgetCost: caps.cost, directorReview: directorReview, maximumReworks: maximumReworks) != nil { dismiss() }
         else { issue = store.errorMessage; store.errorMessage = nil }
     }
 }
@@ -133,7 +133,13 @@ struct ProductionPlanCard: View {
             .alert("调整预算", isPresented: $editingBudget) {
                 TextField("GPU 分钟", text: $minutes); TextField("费用", text: $cost)
                 Button("取消", role: .cancel) {}
-                Button("保存") { if let plan { store.updateBudget(plan.id, minutes: Double(minutes), cost: Double(cost)) } }
+                Button("保存") {
+                    guard let plan else { return }
+                    do {
+                        let caps = try BudgetCap.parse(minutes: minutes, cost: cost, hasGenerateSteps: store.planHasGenerateSteps(plan.id))
+                        store.updateBudget(plan.id, minutes: caps.minutes, cost: caps.cost)
+                    } catch { store.errorMessage = error.localizedDescription }
+                }
             } message: { Text("留空表示不限制这一项。") }
     }
 
@@ -216,14 +222,14 @@ struct ProductionPlanCard: View {
                     HStack(spacing: 10) {
                         if task.status == .review { Button("验收") { store.accept(task.id) } }
                         Button("详情") { onOpenTask(task.id) }
-                    }.font(.system(size: 10)).buttonStyle(.link)
+                    }.font(.system(size: 10)).buttonStyle(.linkPointer)
                 }.padding(.vertical, 3)
             }
             HStack(spacing: 12) {
                 Button(plan.paused ? "继续后续步骤" : "暂停后续步骤") { store.pausePlan(plan.id, paused: !plan.paused) }
                 Button("调整预算") { minutes = plan.budgetMinutes.map { String(Int($0)) } ?? ""; cost = plan.budgetCost.map { String($0) } ?? ""; editingBudget = true }
                 Button("停止整个计划") { store.stopPlan(plan.id) }.tint(.red)
-            }.font(.system(size: 10)).buttonStyle(.link).disabled(done == tasks.count)
+            }.font(.system(size: 10)).buttonStyle(.linkPointer).disabled(done == tasks.count)
         }
     }
 

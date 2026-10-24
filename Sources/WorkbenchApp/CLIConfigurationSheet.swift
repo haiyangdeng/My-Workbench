@@ -30,9 +30,22 @@ struct CLIConfigurationSheet: View {
     @State private var showAdvanced = false
     @State private var commandStep = false
     @State private var limit = ""
+    @State private var environmentText = ""
+    @State private var secretText = ""
+    @State private var useSystemProxy = true
 
     private func lines(_ text: String) -> [String] { text.components(separatedBy: .newlines).filter { !$0.isEmpty } }
     private func optionalLines(_ text: String) -> [String]? { let value = lines(text); return value.isEmpty ? nil : value }
+
+    private var plainEnvironment: [(name: String, value: String)]? { try? ToolConfig.parseEnvironment(environmentText) }
+    private var secretEnvironment: [(name: String, value: String)]? { try? ToolConfig.parseEnvironment(secretText) }
+    private var environmentIssue: String? {
+        do {
+            let plain = try ToolConfig.parseEnvironment(environmentText), secret = try ToolConfig.parseEnvironment(secretText)
+            if let both = plain.first(where: { item in secret.contains { $0.name == item.name } }) { return "「\(both.name)」同时出现在普通变量和密钥变量中。" }
+            return nil
+        } catch { return error.localizedDescription }
+    }
 
     private var draft: ToolConfig {
         var tool = ToolConfig(id: toolToEdit?.id ?? UUID(), name: name.trimmingCharacters(in: .whitespacesAndNewlines), executable: resolvedPath ?? executable, arguments: lines(newTurn))
@@ -47,12 +60,16 @@ struct CLIConfigurationSheet: View {
         tool.loginArguments = optionalLines(loginArguments); tool.useLoginShellPath = useLoginShellPath
         tool.commandStep = commandStep ? true : nil
         tool.concurrencyLimit = Int(limit.trimmingCharacters(in: .whitespaces)).flatMap { $0 > 0 ? min($0, 8) : nil }
+        let plain = plainEnvironment ?? [], secret = secretEnvironment ?? []
+        tool.environment = plain.isEmpty ? nil : Dictionary(plain.map { ($0.name, $0.value) }, uniquingKeysWith: { _, last in last })
+        tool.secretEnvironmentNames = secret.isEmpty ? nil : secret.map(\.name)
+        tool.useSystemProxy = useSystemProxy ? nil : false
         tool.versionChanged = toolToEdit?.executable == tool.executable ? toolToEdit?.versionChanged : nil
         if let toolToEdit, toolToEdit.executable == tool.executable { tool.detectedVersion = toolToEdit.detectedVersion }
         return tool
     }
     private var valid: Bool {
-        store.storageAvailable && !draft.name.isEmpty && resolvedPath != nil && (!lines(newTurn).isEmpty || commandStep) && timeout.isFinite && (0.1...86400).contains(timeout)
+        store.storageAvailable && !draft.name.isEmpty && resolvedPath != nil && (!lines(newTurn).isEmpty || commandStep) && timeout.isFinite && (0.1...86400).contains(timeout) && environmentIssue == nil
     }
 
     var body: some View {
@@ -110,6 +127,16 @@ struct CLIConfigurationSheet: View {
                     TextField("同时运行上限（可留空，最多 8）", text: $limit)
                     Toggle("可用于制作计划中的命令步骤（例如 ffmpeg）", isOn: $commandStep)
                     Text("命令步骤直接用导演写的参数运行这个程序，不经过 shell，也不加入提示或权限参数。").font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+                Section("网络与环境变量") {
+                    Toggle("使用系统代理", isOn: $useSystemProxy)
+                    Text(SystemProxy.summary().map { "系统代理：\($0)。从访达打开的应用不会继承终端里设置的代理变量，打开此项后 CLI 会通过它联网。" } ?? "系统设置里没有启用 HTTP、HTTPS 或 SOCKS 代理。").font(.system(size: 10)).foregroundStyle(.secondary)
+                    argumentEditor("环境变量（每行 NAME=value，可选，随定义导出）", text: $environmentText, height: 46)
+                    argumentEditor("密钥环境变量（每行 NAME=value，值存入钥匙串，不会导出；已保存的值显示为空，留空表示保留）", text: $secretText, height: 46)
+                    if let environmentIssue { Label(environmentIssue, systemImage: "exclamationmark.triangle.fill").font(.system(size: 10)).foregroundStyle(.orange) }
+                    else if let secret = secretEnvironment, let toolToEdit, let missing = secret.first(where: { $0.value.isEmpty && !store.hasSecretValue(toolID: toolToEdit.id, name: $0.name) }) {
+                        Label("「\(missing.name)」还没有保存值。", systemImage: "exclamationmark.triangle.fill").font(.system(size: 10)).foregroundStyle(.orange)
+                    }
                 }
                 Section("预览") { preview }
             }.formStyle(.grouped)
@@ -184,11 +211,19 @@ struct CLIConfigurationSheet: View {
         loginArguments = (tool.loginArguments ?? []).joined(separator: "\n"); timeout = tool.timeout
         commandStep = tool.commandStep == true
         limit = tool.concurrencyLimit.map(String.init) ?? ""
+        environmentText = (tool.environment ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "\n")
+        secretText = (tool.secretEnvironmentNames ?? []).map { $0 + "=" }.joined(separator: "\n")
+        useSystemProxy = tool.useSystemProxy != false
         showAdvanced = true
     }
     private func save() {
         let tool = draft
         let saved = toolToEdit == nil ? store.addTool(tool) : store.updateTool(tool)
-        if saved { dismiss(); onSaved(tool.id, toolToEdit == nil) }
+        guard saved else { return }
+        do {
+            let secret = secretEnvironment ?? []
+            try store.saveSecretEnvironment(toolID: tool.id, names: secret.map(\.name), values: Dictionary(secret.map { ($0.name, $0.value) }, uniquingKeysWith: { _, last in last }), previousNames: toolToEdit?.secretEnvironmentNames ?? [])
+        } catch { store.errorMessage = error.localizedDescription }
+        dismiss(); onSaved(tool.id, toolToEdit == nil)
     }
 }

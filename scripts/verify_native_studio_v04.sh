@@ -6,5 +6,10 @@ if [[ -z "${DEVELOPER_DIR:-}" && -d /Users/ocean/Downloads/Xcode.app/Contents/De
 fi
 cd "$PROJECT_ROOT"
 mkdir -p work/studio-v04-qa
-xcrun swiftc -parse-as-library -swift-version 5 -I .build/xcode/Build/Products/Debug .build/xcode/Build/Products/Debug/SwiftTerm.o Sources/WorkbenchCore/*.swift Sources/WorkbenchApp/WorkbenchStore.swift Sources/WorkbenchApp/WorkbenchView.swift Sources/WorkbenchApp/StudioComponents.swift Sources/WorkbenchApp/ReadOnlyTextView.swift Sources/WorkbenchApp/ExecutionViews.swift Sources/WorkbenchApp/CollaborationViews.swift Sources/WorkbenchApp/TerminalWorkspace.swift Sources/WorkbenchApp/WorkspaceConfigurationSheet.swift scripts/verify_native_studio_v04.swift -o work/studio-v04-qa/verify
+# Every app source except the @main app file, so newly added files are always included.
+APP_SOURCES=()
+for source in Sources/WorkbenchApp/*.swift; do
+  if [[ "${source:t}" != MyWorkbenchApp.swift ]]; then APP_SOURCES+=("$source"); fi
+done
+xcrun swiftc -parse-as-library -swift-version 5 -I .build/xcode/Build/Products/Debug .build/xcode/Build/Products/Debug/SwiftTerm.o Sources/WorkbenchCore/*.swift "${APP_SOURCES[@]}" scripts/verify_native_studio_v04.swift -o work/studio-v04-qa/verify
 work/studio-v04-qa/verify

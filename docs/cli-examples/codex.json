@@ -1,0 +1,25 @@
+{
+  "format" : "myworkbench.cli",
+  "version" : 1,
+  "tool" : {
+    "id" : "00000000-0000-0000-0000-000000000000",
+    "name" : "Codex",
+    "executable" : "codex",
+    "adapter" : "command",
+    "arguments" : ["exec", "{flags}", "--json", "--skip-git-repo-check", "--", "{prompt}"],
+    "resumeArguments" : ["exec", "{flags}", "resume", "--json", "--skip-git-repo-check", "--", "{session_id}", "{prompt}"],
+    "interactiveResumeArguments" : ["--sandbox", "read-only", "resume", "{session_id}"],
+    "outputFormat" : "jsonLines",
+    "includeInstructions" : true,
+    "readOnlyArguments" : ["--sandbox", "read-only"],
+    "editArguments" : ["--sandbox", "workspace-write", "--add-dir", "{output}"],
+    "structuredOutputArguments" : ["--output-schema", "{schema_file}"],
+    "modelArguments" : ["--model", "{model}"],
+    "versionArguments" : ["--version"],
+    "loginStatusArguments" : ["login", "status"],
+    "loginArguments" : ["login"],
+    "loggedOutText" : "Not logged in",
+    "useLoginShellPath" : true,
+    "timeoutSeconds" : 1800
+  }
+}

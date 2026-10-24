@@ -19,7 +19,7 @@ struct PlannerConfigurationSheet: View {
             Text(managers.isEmpty ? "需要一位绑定 CLI、且该 CLI 配置了只读权限（或不由工作台管理权限）的员工。" : "拆解以只读方式运行所选员工的 CLI，生成计划。").font(.system(size: 11)).foregroundStyle(.secondary)
             HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button("生成协作计划") {
                 if let managerID, let projectID = store.activeProjectID, let id = store.generatePlan(goal: goal, managerID: managerID, projectID: projectID) { onCreated(id); dismiss() }
-            }.buttonStyle(.borderedProminent).disabled(managerID == nil || store.activeProjectID == nil || goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.storageAvailable) }
+            }.buttonStyle(.borderedProminentPointer).disabled(managerID == nil || store.activeProjectID == nil || goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.storageAvailable) }
         }.padding(30).frame(width: 610, height: 470).onAppear { managerID = managers.first?.id }
     }
 }
@@ -64,7 +64,7 @@ struct PlanApprovalSheet: View {
                             TextField("验收标准", text: $draft.steps[index].acceptance, axis: .vertical).lineLimit(2...3)
                             TextField("前序步骤编号，用逗号分隔", text: Binding(get: { draft.steps[index].dependencies.joined(separator: ", ") }, set: { draft.steps[index].dependencies = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }))
                             Button("删除这个步骤", role: .destructive) { let removed = draft.steps.remove(at: index).id; for i in draft.steps.indices { draft.steps[i].dependencies.removeAll { $0 == removed } } }
-                                .buttonStyle(.link).font(.system(size: 10)).disabled(draft.steps.count <= 1)
+                                .buttonStyle(.linkPointer).font(.system(size: 10)).disabled(draft.steps.count <= 1)
                         }.font(.system(size: 11)).padding(17).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
                     }
                 }
@@ -81,7 +81,7 @@ struct PlanApprovalSheet: View {
                 Text("本轮最多 \(draft.steps.count * (1 + maximumReworks) * 2) 次执行与审核。审核无法确认达标时暂停计划；费用由工具账户计费。").font(.system(size: 10)).foregroundStyle(.secondary)
             } else { Text("每步成功后等待你验收，再执行依赖它的步骤。").font(.system(size: 11)).foregroundStyle(.secondary) }
             if let issue { Text(issue).font(.system(size: 11)).foregroundStyle(.red) }
-            HStack { Spacer(); Button("稍后再看") { dismiss() }.keyboardShortcut(.cancelAction); Button("确认计划并启动") { approve() }.buttonStyle(.borderedProminent).disabled(autoReview && reviewerID == nil) }
+            HStack { Spacer(); Button("稍后再看") { dismiss() }.keyboardShortcut(.cancelAction); Button("确认计划并启动") { approve() }.buttonStyle(.borderedProminentPointer).disabled(autoReview && reviewerID == nil) }
         }.padding(30).frame(width: 690, height: 680).onAppear { reviewerID = reviewers.first?.id }
     }
     private func approve() {
@@ -121,7 +121,7 @@ struct CollaborationPanel: View {
                                 Text(store.employee(task.employeeID)?.name ?? "未知员工").foregroundStyle(.secondary)
                                 if !(task.dependencyIDs ?? []).isEmpty { Text("依赖：" + (task.dependencyIDs ?? []).compactMap { dependency in store.snapshot.tasks.first { $0.id == dependency }?.title }.joined(separator: "、")).foregroundStyle(.secondary) }
                             }.font(.system(size: 10)).padding(.vertical, 5)
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(.plainPointer)
                     }
                 }
                 HStack {

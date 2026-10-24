@@ -280,6 +280,12 @@ These describe behavior only; the visuals belong in DESIGN_V06.
 
 M5 comes first because everything else depends on it. Once M5 is done, the server, template and manual-run part of M8 (MD-01, 02, 05–12) can be built alongside M6 and M7, since it touches different code. The director part (MD-16–19) needs M7's plan engine. Each milestone ends with a VALIDATION.md entry that lists what was proven and what was not.
 
+Status on 2026-10-24: a full test pass is recorded in [TEST_REPORT_2026-10-24.md](TEST_REPORT_2026-10-24.md):
+- All findings are fixed, including the four bugs from the 2026-10-18 review and the MD-02, MD-16 and CH-13 gaps.
+- Codex ran for real and passed 25 of 26 cases, including team review and director review.
+- On-demand GPU servers are covered with a stand-in SSH (see [GPU_SERVERS.md](GPU_SERVERS.md)).
+- Still open: A55 on your server, Claude Code signed in, and a hands-on UI pass.
+
 Status on 2026-10-18: M5–M9 are implemented with the fixture checks recorded in [VALIDATION.md](VALIDATION.md). The product is now named **Workbench**. The independent [PRD review](REVIEW_2026-10-18.md) found four reproducible issues, including budget enforcement gaps; implementation does not mean final acceptance. Codex login and a single real reply have been confirmed on this Mac, with a test-result classification bug. Real multi-turn editing and cross-CLI collaboration, A55 on a real cloud GPU, and hands-on interaction and accessibility testing remain open.
 
 ## 11 Acceptance cases

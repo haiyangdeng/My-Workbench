@@ -13,7 +13,14 @@ extension WorkbenchStore {
     @discardableResult func duplicateTool(_ id: UUID) -> UUID? {
         guard var copy = tool(id), copy.isCLI else { return nil }
         copy.id = UUID(); copy.name += " 副本"; copy.detectedVersion = nil; copy.versionChanged = nil
-        return addTool(copy) ? copy.id : nil
+        guard addTool(copy) else { return nil }
+        // Secret variables live in the Keychain under the CLI's ID; the copy gets its own items.
+        for name in copy.secretEnvironmentNames ?? [] {
+            if let value = try? CredentialVault.cliEnvironment.read(account: CredentialVault.account(toolID: id, name: name)) {
+                try? CredentialVault.cliEnvironment.save(value, account: CredentialVault.account(toolID: copy.id, name: name))
+            }
+        }
+        return copy.id
     }
     func exportedDefinition(_ id: UUID) throws -> Data {
         guard let tool = tool(id), tool.isCLI else { throw CocoaError(.fileNoSuchFile) }
@@ -58,6 +65,33 @@ extension WorkbenchStore {
     }
     func diff(directory: String, files: [String]) async -> String {
         await GitRepository(directory: directory).diff(files: files)
+    }
+
+    /// Git status and content fingerprints of the changed files, taken before an Edit run (nil outside a git work tree).
+    func changeBaseline(_ directory: String) async -> (status: [String: String], content: [String: String])? {
+        guard let status = await gitStatus(directory) else { return nil }
+        let content = await Task.detached { GitRepository.fingerprints(directory: directory, files: status.keys) }.value
+        return (status, content)
+    }
+    /// Files the run changed since the baseline, including further edits to files that were already modified.
+    func changedFiles(since baseline: (status: [String: String], content: [String: String]), directory: String) async -> [String] {
+        let after = await gitStatus(directory) ?? baseline.status
+        let unchangedStatus = Set(baseline.content.keys.filter { after[$0] == baseline.status[$0] })
+        let contentAfter = await Task.detached { GitRepository.fingerprints(directory: directory, files: unchangedStatus) }.value
+        return GitRepository.changedFiles(before: baseline.status, after: after, beforeContent: baseline.content.filter { unchangedStatus.contains($0.key) }, afterContent: contentAfter)
+    }
+    /// Saves the files an Edit step changed, with their diff, as `changes.diff` in the run's outputs. Reviewers receive it
+    /// as evidence (TM-07); without it they only see the step's reply and cannot check work done in the project.
+    func writeChangeEvidence(files: [String], directory: String, outputDirectory: String, log: RunLog) async {
+        guard !files.isEmpty else { return }
+        var diff = await GitRepository(directory: directory).diff(files: files)
+        let limit = 200_000
+        if diff.utf8.count > limit { diff = String(decoding: Data(diff.utf8.prefix(limit)), as: UTF8.self) + "\n…（差异超过 200 KB，其余已省略）\n" }
+        let body = "本次运行在项目中改动的文件（\(files.count) 个）：\n" + files.map { "- " + $0 }.joined(separator: "\n") + "\n\n" + diff
+        do {
+            try body.write(to: URL(fileURLWithPath: outputDirectory).appendingPathComponent("changes.diff"), atomically: true, encoding: .utf8)
+            log.append("[system] 本次改动了 \(files.count) 个文件，差异已保存为 changes.diff\n")
+        } catch { log.append("[system] 改动记录保存失败：\(error.localizedDescription)\n") }
     }
 
     // MARK: TM-08 worktrees

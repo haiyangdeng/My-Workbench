@@ -3,6 +3,8 @@
 Workbench now opens in “夜幕 · 深色” (dark). Settings can switch it to “云蓝 · 浅色” (light). The choice is stored under the preference key `studioThemeV06` and does not follow the system appearance.
 A light choice saved by older builds under `studioThemeV04` is no longer read, so after updating the app starts in dark.
 
+The pixel style (“像素 · 深色”) is a second dark style with its own palette and artwork. See [the pixel style note](../pixel-theme/README.md).
+
 ## Colors
 
 The colors are defined in `Theme` (`Sources/WorkbenchApp/WorkbenchView.swift`). Each value is a light/dark pair.

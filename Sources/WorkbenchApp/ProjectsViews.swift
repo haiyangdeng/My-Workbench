@@ -10,6 +10,7 @@ struct AllProjectsView: View {
     var onEdit: (WorkProject) -> Void
     var onTask: (UUID) -> Void
     var initialModuleID: UUID? = nil
+    var initialCategoryID: UUID? = nil
     @State private var filter = ProjectFilter()
     @State private var showTasks = false
     @State private var collapsed: Set<String> = []
@@ -27,7 +28,10 @@ struct AllProjectsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            filterBar.onAppear { if let initialModuleID { filter.moduleID = initialModuleID } }
+            filterBar.onAppear {
+                if let initialModuleID { filter.moduleID = initialModuleID }
+                if let initialCategoryID { filter.category = .id(initialCategoryID) }
+            }
             if store.snapshot.projects.current.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("还没有项目").font(.system(size: 16, weight: .semibold))
@@ -76,7 +80,7 @@ struct AllProjectsView: View {
                     Text("\(members.count)").font(.system(size: 11)).foregroundStyle(.secondary)
                     Spacer()
                 }.contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel("\(category?.name ?? ProjectCategory.uncategorizedName)，\(members.count) 个项目，\(isCollapsed ? "已收起" : "已展开")")
+            }.buttonStyle(.plainPointer).accessibilityLabel("\(category?.name ?? ProjectCategory.uncategorizedName)，\(members.count) 个项目，\(isCollapsed ? "已收起" : "已展开")")
                 .dropDestination(for: String.self) { values, _ in
                     guard let value = values.first, let id = UUID(uuidString: value) else { return false }
                     return store.moveProject(id, to: category?.id)
@@ -124,7 +128,7 @@ struct AllProjectsView: View {
             }.padding(15).frame(maxWidth: .infinity, alignment: .leading).background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(tint.opacity(0.18)))
                 .opacity(project.isArchived ? 0.7 : 1)
-        }.buttonStyle(.plain)
+        }.buttonStyle(.plainPointer)
             .draggable(project.id.uuidString)
             .contextMenu {
                 Button("打开项目") { onOpen(project.id) }
@@ -163,7 +167,7 @@ struct AllProjectsView: View {
                         }
                         Spacer(); StatusBadge(status: task.status)
                     }.padding(.vertical, 8).contentShape(Rectangle())
-                }.buttonStyle(.plain)
+                }.buttonStyle(.plainPointer)
                 Divider()
             }
         }
@@ -194,7 +198,7 @@ struct CategoryManagerSheet: View {
                             Button { store.moveCategory(category.id, by: 1) } label: { Image(systemName: "arrow.down") }.disabled(index == store.snapshot.categories.count - 1).accessibilityLabel("下移 " + category.name)
                             Button("编辑") { editing = category }
                             Button("删除", role: .destructive) { pendingDelete = category }
-                        }.buttonStyle(.borderless).font(.system(size: 11)).padding(.vertical, 9)
+                        }.buttonStyle(.borderlessPointer).font(.system(size: 11)).padding(.vertical, 9)
                         Divider()
                     }
                     HStack { Image(systemName: "tray").foregroundStyle(.secondary).frame(width: 20); Text(ProjectCategory.uncategorizedName).font(.system(size: 13)); Text("内置，不能删除").font(.system(size: 10)).foregroundStyle(.secondary); Spacer() }.padding(.vertical, 9)
@@ -229,13 +233,13 @@ private struct CategoryEditor: View {
             HStack(spacing: 7) {
                 ForEach(colors, id: \.self) { color in
                     Button { category.color = color } label: { Circle().fill(Color(hex: color)).frame(width: 20, height: 20).overlay(Circle().stroke(.primary.opacity(category.color == color ? 0.6 : 0), lineWidth: 2)) }
-                        .buttonStyle(.plain).accessibilityLabel("颜色 \(color)").accessibilityValue(category.color == color ? "已选择" : "未选择")
+                        .buttonStyle(.plainPointer).accessibilityLabel("颜色 \(color)").accessibilityValue(category.color == color ? "已选择" : "未选择")
                 }
             }
             HStack(spacing: 7) {
                 ForEach(icons, id: \.self) { icon in
                     Button { category.icon = icon } label: { Image(systemName: icon).frame(width: 22, height: 22) }
-                        .buttonStyle(.bordered).tint(category.icon == icon ? Color(hex: category.color) : .secondary).accessibilityLabel("图标 \(icon)")
+                        .buttonStyle(.borderedPointer).tint(category.icon == icon ? Color(hex: category.color) : .secondary).accessibilityLabel("图标 \(icon)")
                 }
             }
             HStack { Spacer(); Button("取消", action: onCancel); Button("保存") { onSave(category) }.buttonStyle(StudioPrimaryButtonStyle()).disabled(category.name.trimmingCharacters(in: .whitespaces).isEmpty) }
@@ -293,7 +297,7 @@ struct ProjectConfigurationSheet: View {
                 if projectToEdit != nil { Toggle("归档（只能查看，不能新建或执行任务）", isOn: $archived) }
             }.formStyle(.grouped)
             if let issue { Text(issue).font(.system(size: 11)).foregroundStyle(.red) }
-            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button(projectToEdit == nil ? "放上项目桌" : "保存") { save() }.buttonStyle(.borderedProminent).disabled(!valid).keyboardShortcut(.defaultAction) }
+            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button(projectToEdit == nil ? "放上项目桌" : "保存") { save() }.buttonStyle(.borderedProminentPointer).disabled(!valid).keyboardShortcut(.defaultAction) }
         }.padding(30).frame(width: 580, height: 680)
             .onAppear {
                 if let project = projectToEdit {

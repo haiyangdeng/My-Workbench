@@ -240,3 +240,52 @@ Still not verified: real Claude Code and Codex runs (the standalone CLIs need th
 - Debug build succeeded. Release packaging was not rerun.
 - The last change only touched the banner and card artwork layout. Core tests and M5–M9/CRUD were not rerun after it; their results above come from the build before the images were installed.
 - Still not verified: the dark theme in hands-on use (clicks, VoiceOver, sheets opened from menus), and window sizes other than 1440×900 and 1100×720.
+
+## Pixel style (2026-10-24)
+
+- Added a third style, “像素 · 深色”, selectable in Settings. Ink stays the default. The pixel style has its own palette, stepped corners, hard shadows, block buttons and pixel artwork; see [the pixel style note](design/pixel-theme/README.md).
+- The five pixel images from the user are installed as `StudioHeroPixel` (1900×805) and `StudioVideoPixel` (1432×1070), plus `StudioAudioPixel`, `StudioCodePixel` and `StudioDesignPixel` (1520×1008 each).
+  - They were installed with `--trim 8`, which cuts the light screenshot frames found on the top and left edges of the audio, code and design sources.
+  - A re-measure after trimming shows even edge brightness on all three.
+- `zsh scripts/render_theme_preview.sh`: 16 offscreen renders, passed.
+  - Six pixel pages: home at 1440×900 and 1100×720, empty home, AI 员工, 工具连接, 设置.
+  - An ink home rendered after the pixel pages matches the first ink render (sidebar brightness within 0.005), and the pixel palette differs from ink.
+  - Checked by eye: no doubled text on the block buttons, readable captions on their plates, stepped corners on cards, buttons, fields and the composer.
+- Core tests: 94 passed, 0 failures.
+- Regression, all passed:
+  - M5: 15 checks
+  - M6/M7: 13 checks
+  - M8: 9 checks
+  - M9: 10 checks
+  - CRUD: 10 checks
+- Debug build succeeded. The Xcode project was regenerated for the new `PixelStyle.swift`; project settings are unchanged.
+- Still not verified:
+  - Switching styles by hand in the running app. Only offscreen renders cover the switch.
+  - Project cards, the inspector and sheets in pixel style; they keep rounded corners.
+  - VoiceOver.
+
+## Full test pass, fixes, CLI coverage and on-demand servers (2026-10-24)
+
+The details are in [TEST_REPORT_2026-10-24.md](TEST_REPORT_2026-10-24.md).
+
+- **Fixed and covered by tests:**
+  - B1–B9: budget caps, variant reservation, recovered CLI errors, changed files, reviewer evidence, Stop reaching the CLI's commands, the login check before a run, the usage-limit message, and the system proxy for CLIs.
+  - G1–G3: director scope, health refresh while jobs run, and search filters.
+  - T1: the two stale scripts.
+- **Automated:**
+  - 111 unit tests.
+  - Debug build, and a universal Release build (signature and both architectures checked).
+  - 16 theme renders.
+  - M5 15, M6/M7 13, M8 9, M9 10 and CRUD 10 checks.
+  - Server checks: 8 (9 with `--real-codex`).
+  - Older native checks, including the two scripts that compile again.
+  - The CLI flag audit for Claude Code 2.1.287 and Codex 0.164.0.
+- **Real Codex 0.164.0:**
+  - 25 of 26 scenarios passed in 8 minutes; average turn 22 s, against 128 s before the proxy fix.
+  - The exception is A43a: Codex's own “Trust this folder?” prompt the first time a session continues in the terminal.
+  - Codex also directed one image through an SSH server in 62 s.
+- **Not verified:**
+  - A55 on your GPU server.
+  - Claude Code with a real model.
+  - A hands-on UI pass.
+  - Apple Silicon.

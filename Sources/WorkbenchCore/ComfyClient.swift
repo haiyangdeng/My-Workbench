@@ -38,7 +38,8 @@ public final class ComfyClient: @unchecked Sendable {
         _ = try await json(request("system_stats"))
     }
     /// Version, GPU and VRAM from system_stats, queue length, and whether single-job cancel exists (required to run jobs).
-    public func health() async throws -> ServerHealth {
+    /// `includeNodes: false` skips object_info (often several MB) for the periodic refresh while jobs run.
+    public func health(includeNodes: Bool = true) async throws -> ServerHealth {
         let stats = try await json(request("system_stats"))
         var health = ServerHealth()
         health.version = stats["system"]["comfyui_version"].string
@@ -49,7 +50,7 @@ public final class ComfyClient: @unchecked Sendable {
         }
         if let queue = try? await json(request("queue")) { health.queueLength = (queue["queue_running"].array?.count ?? 0) + (queue["queue_pending"].array?.count ?? 0) }
         if let jobs = try? await json(request("api/jobs", query: [URLQueryItem(name: "limit", value: "1")])) { health.supportsJobCancel = jobs["jobs"].array != nil }
-        if let info = try? await json(request("object_info")), let classes = info.object?.keys { health.nodeClasses = Set(classes) }
+        if includeNodes, let info = try? await json(request("object_info")), let classes = info.object?.keys { health.nodeClasses = Set(classes) }
         return health
     }
     /// Uploads a local file to the server's input folder and returns the name a Load node expects ("subfolder/name").

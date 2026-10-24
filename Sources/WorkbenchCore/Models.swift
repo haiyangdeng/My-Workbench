@@ -49,6 +49,13 @@ public struct ToolConfig: Identifiable, Codable, Equatable, Sendable {
     public var concurrencyLimit: Int?
     /// The detected version differs from the last one (TL-12); cleared by a successful check.
     public var versionChanged: Bool?
+    /// Extra environment variables for this CLI, for example ANTHROPIC_BASE_URL. Saved with the definition and exported.
+    public var environment: [String: String]?
+    /// Names of variables whose values are secrets. The values live in the Keychain (see `CredentialVault.cliEnvironment`)
+    /// and are never saved in the workspace or exported.
+    public var secretEnvironmentNames: [String]?
+    /// Pass the macOS system proxy to the CLI (see SystemProxy). nil means on.
+    public var useSystemProxy: Bool?
 
     public init(id: UUID = UUID(), name: String, executable: String, arguments: [String]) {
         self.id = id; self.name = name; self.executable = executable; self.arguments = arguments

@@ -3,7 +3,7 @@ import Foundation
 public enum ReviewEvidence {
     public static func text(artifacts: [WorkArtifact], archive: RunArchive, maximumBytes: Int = 100000) throws -> String {
         var remaining = max(0, maximumBytes), sections: [String] = []
-        let textTypes = Set(["txt", "md", "json", "csv", "log", "swift", "py", "html", "css", "js", "ts", "xml", "yaml", "yml"])
+        let textTypes = Set(["txt", "md", "json", "csv", "log", "swift", "py", "html", "css", "js", "ts", "xml", "yaml", "yml", "diff", "patch"])
         for artifact in artifacts {
             let url = try archive.url(for: artifact)
             let header = "文件：\(url.lastPathComponent)；run：\(artifact.runID)；大小：\(artifact.byteCount)字节；\(artifact.accepted ? "已验收的前序交付" : "当前候选")"

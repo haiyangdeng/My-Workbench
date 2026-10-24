@@ -17,6 +17,12 @@ public struct ComfyServer: Identifiable, Codable, Equatable, Sendable {
     public var timeoutSeconds: Double
     public var enabled: Bool
     public var legacyToolID: UUID?
+    /// MD-04: commands that start and stop the cloud instance (for example a provider's CLI), one argument per element.
+    /// They run only when the user clicks Start or Stop on the server card.
+    public var startCommand: [String]?
+    public var stopCommand: [String]?
+    /// After Start, how long to wait for the server to answer before giving up (seconds).
+    public var startupWaitSeconds: Double?
     public init(id: UUID = UUID(), name: String, baseURL: String, ssh: SSHConnection? = nil, requiresToken: Bool = false, hourlyPrice: Double? = nil, currency: String? = nil, maximumDownloadBytes: Int64 = 512 * 1024 * 1024, maximumUploadBytes: Int64 = 200 * 1024 * 1024, jobLimit: Int = 1, timeoutSeconds: Double = 3600, enabled: Bool = true) {
         self.id = id; self.name = name; self.baseURL = baseURL; self.ssh = ssh; self.requiresToken = requiresToken; self.hourlyPrice = hourlyPrice; self.currency = currency
         self.maximumDownloadBytes = maximumDownloadBytes; self.maximumUploadBytes = maximumUploadBytes; self.jobLimit = jobLimit; self.timeoutSeconds = timeoutSeconds; self.enabled = enabled
@@ -330,6 +336,39 @@ public enum MediaError: LocalizedError, Equatable {
         case .serverUnavailable(let reason): return "服务器不可用：\(reason)"
         case .invalidStep(let reason): return "制作计划无效：\(reason)"
         }
+    }
+}
+
+/// A production plan's spending caps (MD-18). A cap the user gives must be a finite number above zero; a plan that
+/// submits generate jobs needs at least one cap. Zero or a negative number is an input mistake, never "no limit".
+public enum BudgetCap {
+    public enum Problem: LocalizedError, Equatable {
+        case notANumber, notPositive, missing
+        public var errorDescription: String? {
+            switch self {
+            case .notANumber: return "预算需要是数字。"
+            case .notPositive: return "预算上限需要大于 0。留空表示不限制这一项。"
+            case .missing: return "这个计划包含生成步骤，请至少设置一个预算上限（GPU 分钟或费用）。"
+            }
+        }
+    }
+
+    public static func validate(minutes: Double?, cost: Double?, hasGenerateSteps: Bool) throws {
+        for value in [minutes, cost].compactMap({ $0 }) where !(value.isFinite && value > 0) { throw Problem.notPositive }
+        if hasGenerateSteps && minutes == nil && cost == nil { throw Problem.missing }
+    }
+
+    /// Reads the two form fields; an empty field means no cap for that item.
+    public static func parse(minutes: String, cost: String, hasGenerateSteps: Bool) throws -> (minutes: Double?, cost: Double?) {
+        func number(_ text: String) throws -> Double? {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { return nil }
+            guard let value = Double(trimmed) else { throw Problem.notANumber }
+            return value
+        }
+        let result = (minutes: try number(minutes), cost: try number(cost))
+        try validate(minutes: result.minutes, cost: result.cost, hasGenerateSteps: hasGenerateSteps)
+        return result
     }
 }
 

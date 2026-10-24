@@ -29,6 +29,38 @@ public enum CLIError: LocalizedError, Equatable {
     }
 }
 
+public enum CLIEnvironmentError: LocalizedError, Equatable {
+    case invalidLine(String), invalidName(String), reserved(String), duplicate(String)
+    public var errorDescription: String? {
+        switch self {
+        case .invalidLine(let line): return "环境变量每行写成 NAME=value：「\(line)」"
+        case .invalidName(let name): return "环境变量名只能用字母、数字和下划线，且不能以数字开头：「\(name)」"
+        case .reserved(let name): return "「\(name)」由工作台使用，不能自行设置。"
+        case .duplicate(let name): return "环境变量「\(name)」重复了。"
+        }
+    }
+}
+
+extension ToolConfig {
+    /// Reads "NAME=value" lines. Names use letters, digits and underscores and do not start with a digit; MYWORKBENCH_* is
+    /// reserved. Blank lines are skipped. The value is everything after the first "=" and may be empty.
+    public static func parseEnvironment(_ text: String) throws -> [(name: String, value: String)] {
+        var result: [(name: String, value: String)] = [], seen: Set<String> = []
+        for raw in text.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            guard let equals = line.firstIndex(of: "=") else { throw CLIEnvironmentError.invalidLine(line) }
+            let name = String(line[..<equals]).trimmingCharacters(in: .whitespaces), value = String(line[line.index(after: equals)...])
+            guard let first = name.unicodeScalars.first, !CharacterSet.decimalDigits.contains(first),
+                  name.unicodeScalars.allSatisfy({ $0 == "_" || ($0.isASCII && CharacterSet.alphanumerics.contains($0)) }) else { throw CLIEnvironmentError.invalidName(name) }
+            if name.uppercased().hasPrefix("MYWORKBENCH_") { throw CLIEnvironmentError.reserved(name) }
+            guard seen.insert(name).inserted else { throw CLIEnvironmentError.duplicate(name) }
+            result.append((name, value))
+        }
+        return result
+    }
+}
+
 public struct CLIInvocation: Sendable {
     public var prompt: String
     public var instructions: String

@@ -14,8 +14,18 @@ struct ServerSheet: View {
     @State private var baseURL = "http://127.0.0.1:8188"
     @State private var useSSH = false
     @State private var hostAlias = ""
+    @State private var sshUser = ""
+    @State private var sshPort = ""
+    @State private var identityFile = ""
+    @State private var usesPassword = false
+    @State private var sshPassword = ""
+    @State private var hostKeyPolicy = SSHHostKeyPolicy.acceptNew
+    @State private var remoteHost = "127.0.0.1"
     @State private var localPort = 8189
     @State private var remotePort = 8188
+    @State private var startCommand = ""
+    @State private var stopCommand = ""
+    @State private var startupWait = 300.0
     @State private var requiresToken = false
     @State private var token = ""
     @State private var price = ""
@@ -26,50 +36,104 @@ struct ServerSheet: View {
     @State private var timeout = 3600.0
     @State private var issue: String?
 
+    private func lines(_ text: String) -> [String]? {
+        let value = text.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        return value.isEmpty ? nil : value
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(serverToEdit == nil ? "添加制作服务器" : "编辑制作服务器").font(.system(size: 23, weight: .medium))
-            Text("运行 ComfyUI 的服务器，通常在云 GPU 上。工作台只连接你填写的地址，不会开关云主机。").font(.system(size: 12)).foregroundStyle(.secondary)
+            Text("运行 ComfyUI 的服务器，通常是按需开机的云 GPU。工作台只连接你填写的地址；只有点“启动”“停止”时才会运行你填写的开关机命令。").font(.system(size: 12)).foregroundStyle(.secondary)
             Form {
                 TextField("名称", text: $name, prompt: Text("例如 AutoDL 4090"))
-                Toggle("通过 SSH 隧道连接（只在本机 127.0.0.1 开放）", isOn: $useSSH)
-                if useSSH {
-                    TextField("~/.ssh/config 中的主机别名", text: $hostAlias)
-                    TextField("本机端口", value: $localPort, format: .number)
-                    TextField("服务器上的 ComfyUI 端口", value: $remotePort, format: .number)
-                } else { TextField("ComfyUI 地址", text: $baseURL) }
-                Toggle("需要 Bearer API 凭证", isOn: $requiresToken)
-                if requiresToken { SecureField(serverToEdit == nil ? "API 凭证（只存入钥匙串）" : "新凭证（留空保留原值）", text: $token) }
-                HStack { TextField("每小时价格（用于估算，可留空）", text: $price); TextField("币种", text: $currency).frame(width: 80) }
-                Stepper("同时运行 \(jobLimit) 个任务", value: $jobLimit, in: 1...8)
-                TextField("下载上限（MB）", value: $downloadMB, format: .number)
-                TextField("上传上限（MB）", value: $uploadMB, format: .number)
-                TextField("单个任务超时（秒）", value: $timeout, format: .number)
+                Section("连接") {
+                    Toggle("通过 SSH 隧道连接（只在本机 127.0.0.1 开放）", isOn: $useSSH)
+                    if useSSH {
+                        TextField("主机", text: $hostAlias, prompt: Text("~/.ssh/config 中的别名，或地址，如 connect.example.com"))
+                        TextField("用户名", text: $sshUser, prompt: Text("可留空，如 root"))
+                        TextField("SSH 端口", text: $sshPort, prompt: Text("可留空，默认 22"))
+                        Picker("登录方式", selection: $usesPassword) { Text("私钥或 ssh-agent").tag(false); Text("密码（存入钥匙串）").tag(true) }.pickerStyle(.segmented)
+                        if usesPassword {
+                            SecureField(serverToEdit?.ssh?.usesPassword == true ? "新密码（留空保留原值）" : "SSH 密码", text: $sshPassword)
+                            Text("密码只存在钥匙串里；连接时通过 SSH_ASKPASS 只交给这次的 ssh 进程。能用密钥时建议用密钥。").font(.system(size: 10)).foregroundStyle(.secondary)
+                        } else {
+                            HStack {
+                                TextField("私钥文件", text: $identityFile, prompt: Text("可留空，使用 ssh-agent 或 ~/.ssh/config"))
+                                Button("选择…") { chooseKey() }
+                            }
+                        }
+                        Picker("主机密钥", selection: $hostKeyPolicy) { ForEach(SSHHostKeyPolicy.allCases, id: \.self) { Text($0.title).tag($0) } }
+                        TextField("本机端口", value: $localPort, format: .number.grouping(.never))
+                        TextField("ComfyUI 端口（服务器上）", value: $remotePort, format: .number.grouping(.never))
+                        TextField("ComfyUI 地址（从 SSH 主机看）", text: $remoteHost, prompt: Text("127.0.0.1"))
+                    } else { TextField("ComfyUI 地址", text: $baseURL) }
+                    Toggle("需要 Bearer API 凭证", isOn: $requiresToken)
+                    if requiresToken { SecureField(serverToEdit == nil ? "API 凭证（只存入钥匙串）" : "新凭证（留空保留原值）", text: $token) }
+                }
+                Section("开机与关机（可选）") {
+                    commandEditor("启动命令，每行一个参数（例如云厂商 CLI 的开机命令）", text: $startCommand)
+                    commandEditor("停止命令，每行一个参数", text: $stopCommand)
+                    TextField("启动后等待就绪（秒）", value: $startupWait, format: .number.grouping(.never))
+                    Text("命令不经过 shell，第一行可以是命令名（从登录 Shell 的 PATH 查找）或绝对路径。只有点服务器卡片上的“启动”“停止”时才会运行。").font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+                Section("用量") {
+                    HStack { TextField("每小时价格（用于估算，可留空）", text: $price); TextField("币种", text: $currency).frame(width: 80) }
+                    Stepper("同时运行 \(jobLimit) 个任务", value: $jobLimit, in: 1...8)
+                    TextField("下载上限（MB）", value: $downloadMB, format: .number)
+                    TextField("上传上限（MB）", value: $uploadMB, format: .number)
+                    TextField("单个任务超时（秒）", value: $timeout, format: .number)
+                }
             }.formStyle(.grouped)
             Text("服务器需要支持按编号取消单个任务（ComfyUI 的 /api/jobs 接口），否则不能运行任务。价格只用于估算，不是服务端的计费上限。").font(.system(size: 10)).foregroundStyle(.secondary)
             if let issue { Text(issue).font(.system(size: 11)).foregroundStyle(.red) }
-            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button("保存") { save() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(name.trimmingCharacters(in: .whitespaces).isEmpty) }
-        }.padding(28).frame(width: 600, height: 720)
+            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button("保存") { save() }.buttonStyle(.borderedProminentPointer).keyboardShortcut(.defaultAction).disabled(name.trimmingCharacters(in: .whitespaces).isEmpty) }
+        }.padding(28).frame(width: 680, height: 820)
             .onAppear {
                 guard let server = serverToEdit else { return }
                 name = server.name; baseURL = server.baseURL; requiresToken = server.requiresToken
                 price = server.hourlyPrice.map { String($0) } ?? ""; currency = server.currency ?? "CNY"
                 downloadMB = Double(server.maximumDownloadBytes) / 1_048_576; uploadMB = Double(server.maximumUploadBytes) / 1_048_576
                 jobLimit = server.jobLimit; timeout = server.timeoutSeconds
-                if let ssh = server.ssh { useSSH = true; hostAlias = ssh.hostAlias; localPort = ssh.localPort; remotePort = ssh.remotePort }
+                startCommand = (server.startCommand ?? []).joined(separator: "\n"); stopCommand = (server.stopCommand ?? []).joined(separator: "\n")
+                startupWait = server.startupWaitSeconds ?? 300
+                if let ssh = server.ssh {
+                    useSSH = true; hostAlias = ssh.hostAlias; localPort = ssh.localPort; remotePort = ssh.remotePort
+                    sshUser = ssh.user ?? ""; sshPort = ssh.port.map(String.init) ?? ""; identityFile = ssh.identityFile ?? ""
+                    usesPassword = ssh.usesPassword == true; hostKeyPolicy = ssh.hostKeyPolicy ?? .strict; remoteHost = ssh.remoteHost ?? "127.0.0.1"
+                }
             }
+    }
+    private func commandEditor(_ title: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.system(size: 11))
+            TextEditor(text: text).font(.system(size: 11, design: .monospaced)).frame(height: 44).padding(4)
+        }
+    }
+    private func chooseKey() {
+        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false; panel.showsHiddenFiles = true
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh")
+        if panel.runModal() == .OK, let url = panel.url { identityFile = url.path }
     }
     private func save() {
         guard downloadMB.isFinite, (1...8192).contains(downloadMB), uploadMB.isFinite, (1...8192).contains(uploadMB), timeout.isFinite, (1...86400).contains(timeout) else { issue = "下载与上传上限应为 1–8192 MB，超时为 1–86400 秒。"; return }
+        guard startupWait.isFinite, (10...3600).contains(startupWait) else { issue = "启动后等待时间应为 10–3600 秒。"; return }
         let hourly = price.trimmingCharacters(in: .whitespaces).isEmpty ? nil : Double(price)
         if !price.trimmingCharacters(in: .whitespaces).isEmpty && (hourly == nil || hourly! < 0) { issue = "价格需要是数字。"; return }
+        let portText = sshPort.trimmingCharacters(in: .whitespaces)
+        if useSSH && !portText.isEmpty && Int(portText) == nil { issue = "SSH 端口需要是数字。"; return }
+        func trimmed(_ text: String) -> String? { let value = text.trimmingCharacters(in: .whitespaces); return value.isEmpty ? nil : value }
         var server = serverToEdit ?? ComfyServer(name: name, baseURL: baseURL)
         server.name = name; server.baseURL = useSSH ? "http://127.0.0.1:\(remotePort)" : baseURL
-        server.ssh = useSSH ? SSHConnection(hostAlias: hostAlias, localPort: localPort, remotePort: remotePort) : nil
+        server.ssh = useSSH ? SSHConnection(hostAlias: hostAlias.trimmingCharacters(in: .whitespaces), localPort: localPort, remotePort: remotePort, user: trimmed(sshUser), port: Int(portText),
+                                            identityFile: usesPassword ? nil : trimmed((identityFile as NSString).expandingTildeInPath), usesPassword: usesPassword ? true : nil,
+                                            hostKeyPolicy: hostKeyPolicy, remoteHost: trimmed(remoteHost).flatMap { $0 == "127.0.0.1" ? nil : $0 }) : nil
+        server.startCommand = lines(startCommand); server.stopCommand = lines(stopCommand); server.startupWaitSeconds = startupWait == 300 ? nil : startupWait
         server.requiresToken = requiresToken; server.hourlyPrice = hourly; server.currency = currency
         server.maximumDownloadBytes = Int64(downloadMB * 1_048_576); server.maximumUploadBytes = Int64(uploadMB * 1_048_576)
         server.jobLimit = jobLimit; server.timeoutSeconds = timeout
-        if store.saveServer(server, token: token.isEmpty ? nil : token) { dismiss() } else { issue = store.errorMessage; store.errorMessage = nil }
+        if store.saveServer(server, token: token.isEmpty ? nil : token, sshPassword: usesPassword && !sshPassword.isEmpty ? sshPassword : nil) { dismiss() }
+        else { issue = store.errorMessage == RemoteError.invalidConfiguration.errorDescription ? "连接设置无效：请检查主机、用户名、端口（本机端口 1024–65535）和私钥路径。" : store.errorMessage; store.errorMessage = nil }
     }
 }
 
@@ -98,7 +162,7 @@ struct TemplateSheet: View {
             HStack {
                 if template != nil && templateToEdit == nil { Button("重新选择文件") { chooseWorkflow() } }
                 Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("保存") { save() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(template == nil)
+                Button("保存") { save() }.buttonStyle(.borderedProminentPointer).keyboardShortcut(.defaultAction).disabled(template == nil)
             }
         }.padding(28).frame(width: 760, height: 780)
             .onAppear { template = templateToEdit; estimate = templateToEdit?.estimatedSeconds.map { String(Int($0)) } ?? "" }
@@ -159,7 +223,7 @@ struct TemplateSheet: View {
                 Picker("类型", selection: parameter.type) { ForEach(ParameterType.allCases, id: \.self) { Text($0.title).tag($0) } }.labelsHidden().frame(width: 110)
                 Text("#\(parameter.wrappedValue.nodeID) · \(parameter.wrappedValue.inputName)").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
                 Spacer()
-                Button("移除", role: .destructive) { template.wrappedValue.parameters.remove(at: index) }.font(.system(size: 10)).buttonStyle(.link)
+                Button("移除", role: .destructive) { template.wrappedValue.parameters.remove(at: index) }.font(.system(size: 10)).buttonStyle(.linkPointer)
             }
             HStack {
                 TextField("说明", text: parameter.description).textFieldStyle(.roundedBorder)
@@ -245,7 +309,7 @@ struct ManualRunSheet: View {
             Text(estimateText).font(.system(size: 11)).foregroundStyle(.secondary)
             Text("提交后才会上传文件并在服务器上运行；random 种子会在提交前变成具体数字并记录。").font(.system(size: 10)).foregroundStyle(.secondary)
             if let issue { Text(issue).font(.system(size: 11)).foregroundStyle(.red) }
-            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button("提交") { submit() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(serverID == nil) }
+            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button("提交") { submit() }.buttonStyle(.borderedProminentPointer).keyboardShortcut(.defaultAction).disabled(serverID == nil) }
         }.padding(28).frame(width: 620, height: 720)
             .onAppear {
                 serverID = store.enabledServers.first?.id
@@ -313,7 +377,7 @@ struct MediaPreview: View {
         case .image: ImageFilePreview(url: url, compact: compact)
         case .video: VideoFilePreview(url: url, compact: compact)
         case .audio: AudioFilePreview(url: url)
-        case .other: Button("使用系统应用打开") { NSWorkspace.shared.open(url) }.buttonStyle(.bordered)
+        case .other: Button("使用系统应用打开") { NSWorkspace.shared.open(url) }.buttonStyle(.borderedPointer)
         }
     }
 }
@@ -326,7 +390,7 @@ private struct ImageFilePreview: View {
         Group {
             if let image = NSImage(contentsOf: url) {
                 Image(nsImage: image).resizable().scaledToFit().frame(maxHeight: compact ? 120 : 240).clipShape(RoundedRectangle(cornerRadius: 8))
-                    .onTapGesture { zoomed = true }.help("点击放大").accessibilityLabel("图片 \(url.lastPathComponent)，点击放大")
+                    .onTapGesture { zoomed = true }.pointerCursor().help("点击放大").accessibilityLabel("图片 \(url.lastPathComponent)，点击放大")
                     .sheet(isPresented: $zoomed) {
                         VStack { Image(nsImage: image).resizable().scaledToFit(); HStack { Text("\(Int(image.size.width))×\(Int(image.size.height))").font(.system(size: 11)).foregroundStyle(.secondary); Spacer(); Button("关闭") { zoomed = false }.keyboardShortcut(.cancelAction) } }
                             .padding(20).frame(minWidth: 700, minHeight: 560)
@@ -373,7 +437,7 @@ private struct AudioFilePreview: View {
     @State private var playing = false
     var body: some View {
         HStack(spacing: 10) {
-            Button { toggle() } label: { Image(systemName: playing ? "pause.fill" : "play.fill") }.buttonStyle(.bordered).accessibilityLabel(playing ? "暂停" : "播放")
+            Button { toggle() } label: { Image(systemName: playing ? "pause.fill" : "play.fill") }.buttonStyle(.borderedPointer).accessibilityLabel(playing ? "暂停" : "播放")
             Canvas { context, size in
                 guard !levels.isEmpty else { return }
                 let width = size.width / CGFloat(levels.count)

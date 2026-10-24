@@ -126,8 +126,8 @@ struct TerminalPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 15) {
-                Button { terminals.showsLog = false } label: { Label("终端", systemImage: "terminal").foregroundStyle(terminals.showsLog ? .secondary : .primary) }.buttonStyle(.plain)
-                Button { terminals.showsLog = true } label: { Label("任务日志", systemImage: "doc.text").foregroundStyle(terminals.showsLog ? .primary : .secondary) }.buttonStyle(.plain)
+                Button { terminals.showsLog = false } label: { Label("终端", systemImage: "terminal").foregroundStyle(terminals.showsLog ? .secondary : .primary) }.buttonStyle(.plainPointer)
+                Button { terminals.showsLog = true } label: { Label("任务日志", systemImage: "doc.text").foregroundStyle(terminals.showsLog ? .primary : .secondary) }.buttonStyle(.plainPointer)
                 if !terminals.showsLog {
                     Picker("会话", selection: $terminals.selectedID) { ForEach(terminals.sessions) { Text($0.name + ($0.ended ? " · 已结束" : "")).tag(Optional($0.id)) } }.labelsHidden().frame(maxWidth: 220)
                 }
@@ -144,7 +144,7 @@ struct TerminalPanel: View {
                     Button("中断 ⌃C") { terminals.selected?.interrupt() }.disabled(terminals.selected?.ended != false)
                     Button("结束会话") { terminals.endSelected() }.disabled(terminals.selected?.ended != false)
                 }
-                Button { terminals.isVisible = false } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("收起面板，保留会话").accessibilityLabel("收起终端面板")
+                Button { terminals.isVisible = false } label: { Image(systemName: "xmark") }.buttonStyle(.plainPointer).help("收起面板，保留会话").accessibilityLabel("收起终端面板")
             }.font(.system(size: 11)).padding(.horizontal, 20).frame(height: 42)
             Divider()
             if terminals.showsLog {

@@ -28,10 +28,31 @@ extension WorkbenchStore {
     }
     var planningCandidates: [Employee] { snapshot.employees.current.filter(canPlanOrReview) }
 
-    /// Extra environment for a CLI. With "use my login shell's PATH", the PATH found at launch replaces Finder's minimal one.
+    /// Extra environment for a CLI, later entries winning: the login shell's PATH (when chosen) in place of Finder's minimal
+    /// one; the macOS system proxy, unless turned off or the app already has proxy variables; the CLI's own variables; and
+    /// its secret variables from the Keychain.
     func environment(for tool: ToolConfig) -> [String: String] {
-        guard tool.useLoginShellPath == true, let path = shellSearchPath else { return [:] }
-        return ["PATH": path]
+        var result: [String: String] = [:]
+        if tool.useLoginShellPath == true, let path = shellSearchPath { result["PATH"] = path }
+        if tool.useSystemProxy != false { result.merge(SystemProxy.environment(settings: SystemProxy.current(), inherited: ProcessInfo.processInfo.environment)) { $1 } }
+        result.merge(tool.environment ?? [:]) { $1 }
+        for name in tool.secretEnvironmentNames ?? [] {
+            if let value = try? CredentialVault.cliEnvironment.read(account: CredentialVault.account(toolID: tool.id, name: name)), !value.isEmpty { result[name] = value }
+        }
+        return result
+    }
+    /// The run log names the added variables (AG-03) but never their values, which may be keys.
+    static func environmentNote(_ environment: [String: String]) -> String? {
+        environment.isEmpty ? nil : "[system] 附加环境变量：\(environment.keys.sorted().joined(separator: "、"))（值不记录）\n"
+    }
+    /// Stores a CLI's secret variables in the Keychain. An empty value keeps what is stored; names no longer listed are removed.
+    func saveSecretEnvironment(toolID: UUID, names: [String], values: [String: String], previousNames: [String]) throws {
+        let vault = CredentialVault.cliEnvironment
+        for name in names { if let value = values[name], !value.isEmpty { try vault.save(value, account: CredentialVault.account(toolID: toolID, name: name)) } }
+        for name in previousNames where !names.contains(name) { try vault.remove(account: CredentialVault.account(toolID: toolID, name: name)) }
+    }
+    func hasSecretValue(toolID: UUID, name: String) -> Bool {
+        ((try? CredentialVault.cliEnvironment.read(account: CredentialVault.account(toolID: toolID, name: name))) ?? nil)?.isEmpty == false
     }
     func environmentAfterLookup(for tool: ToolConfig) async -> [String: String] {
         if tool.useLoginShellPath == true && shellSearchPath == nil { shellSearchPath = await LoginShell.lookup("true").searchPath }
@@ -64,6 +85,7 @@ extension WorkbenchStore {
             }
         }
         if let message = summary.errorMessage { log.append("\n[system] CLI 报告：\(message)\n") }
+        else if let recovered = summary.recoveredErrors.last { log.append("\n[system] CLI 中途报告（已恢复，不影响结果）：\(recovered)\n") }
         guard let index = snapshot.runs.firstIndex(where: { $0.id == runID }) else { return }
         if snapshot.runs[index].sessionID == nil { snapshot.runs[index].sessionID = summary.sessionID }
         if !summary.replyText.isEmpty { snapshot.runs[index].replyText = String(summary.replyText.prefix(16_000)) }
@@ -98,7 +120,8 @@ extension WorkbenchStore {
                 let summary = collector.finish(); let tail = log.drain(); try? log.close()
                 result.succeeded = process.status == .review && summary.errorMessage == nil && !summary.replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 result.reply = String(summary.replyText.prefix(2000)); result.sessionID = summary.sessionID ?? session
-                result.detail = result.succeeded ? "退出码 0" : "\(process.status.title) · 退出码 \(process.exitCode)\n\(summary.errorMessage ?? String(tail.suffix(1500)))"
+                let explanation = result.succeeded ? nil : TurnDiagnosis.explain(status: process.status == .review ? .failed : process.status, exitCode: process.exitCode, summary: summary, tool: tool, outputTail: String(tail.suffix(1500)))
+                result.detail = result.succeeded ? "退出码 0" : "\(process.status.title) · 退出码 \(process.exitCode)\n" + (explanation.map { $0 + "\n" } ?? "") + (summary.errorMessage ?? String(tail.suffix(1500)))
             } catch { result.detail = error.localizedDescription }
             result.finishedAt = Date()
             guard self.tool(toolID) == tool else { return }

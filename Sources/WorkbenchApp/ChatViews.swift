@@ -17,6 +17,8 @@ enum ProjectTab: String, CaseIterable, Identifiable {
 /// The bottom input bar: pick agents, mode and access, then send to the open conversation or start a new one.
 struct ChatComposerView: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.studioStyle) private var style
+    private var pixel: Bool { colorScheme == .dark && style.isPixel }
     @ObservedObject var store: WorkbenchStore
     var accent: Color
     @Binding var text: String
@@ -25,6 +27,7 @@ struct ChatComposerView: View {
     @Binding var access: AccessLevel
     @Binding var attachments: [String]
     @Binding var projectID: UUID?
+    /// Director mode: the templates and servers the director may use; nil means the default for the project.
     var lockedProjectID: UUID?
     var conversationTitle: String?
     var onSend: () -> Void
@@ -35,6 +38,8 @@ struct ChatComposerView: View {
     var onTerminal: () -> Void
     var onNewProject: () -> Void
     var onNewConversation: () -> Void
+    /// Director mode: the templates and servers the director may use; nil means the default for the project.
+    var directorScope: Binding<DirectorScope?> = .constant(nil)
     @FocusState private var focused: Bool
 
     private var agents: [Employee] { agentIDs.compactMap { store.employee($0) } }
@@ -54,21 +59,51 @@ struct ChatComposerView: View {
                     }
                     .accessibilityIdentifier("studio.idea")
                 agentMenu
-                Button(action: onAttach) { Image(systemName: "paperclip").font(.system(size: 16)) }.buttonStyle(.plain).help("添加参考文件（只传路径，不上传）").accessibilityLabel("添加参考文件")
+                Button(action: onAttach) { Image(systemName: "paperclip").font(.system(size: 16)) }.buttonStyle(.plainPointer).help("添加参考文件（只传路径，不上传）").accessibilityLabel("添加参考文件")
                 Menu {
                     Button("把输入做成任务…", action: onNewTask).disabled(!store.snapshot.employees.current.contains { $0.enabled != false })
                     Button("让 AI 安排协作（任务）", action: onPlanner).disabled(store.currentProject?.isArchived != false || store.planningCandidates.isEmpty)
                     Button("新对话", action: onNewConversation)
                     Button("添加工作区", action: onAddWorkspace)
                     Button("打开终端", action: onTerminal)
-                } label: { Image(systemName: "square.grid.2x2").frame(width: 32, height: 32).background(colorScheme == .dark ? Theme.raised : Theme.paper, in: Circle()) }
+                } label: { Image(systemName: "square.grid.2x2").frame(width: 32, height: 32).background(colorScheme == .dark ? Theme.raised : Theme.paper, in: StudioShape(16, pixel: pixel)) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("更多操作")
-                Button(action: onSend) { Image(systemName: "paperplane").font(.system(size: 15, weight: colorScheme == .dark ? .semibold : .regular)).foregroundStyle(.white).frame(width: 38, height: 38).background(Theme.adaptive("3B7B65", "2F8170"), in: Circle()).shadow(color: colorScheme == .dark ? Color(hex: "2F8170").opacity(0.45) : .clear, radius: 8) }
-                    .buttonStyle(.plain).disabled((text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty) || !store.storageAvailable)
+                Button(action: onSend) {
+                    Image(systemName: "paperplane").font(.system(size: 15, weight: colorScheme == .dark ? .semibold : .regular)).foregroundStyle(.white).frame(width: 38, height: 38)
+                        .background { if pixel { PixelBlockBackground(fill: Theme.actionFill, radius: 19) } else { Circle().fill(Theme.adaptive("3B7B65", "2F8170")) } }
+                        .studioShadow(pixel: pixel, color: colorScheme == .dark ? Color(hex: "2F8170").opacity(0.45) : .clear, radius: 8, y: 0)
+                }
+                    .buttonStyle(.plainPointer).disabled((text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty) || !store.storageAvailable)
                     .help("发送（Return）；Shift+Return 换行").accessibilityLabel("发送").accessibilityIdentifier("studio.compose")
             }.padding(.leading, 18).padding(.trailing, 6).frame(minHeight: 50)
-                .background(colorScheme == .dark ? Theme.input : Theme.surface, in: RoundedRectangle(cornerRadius: 25)).overlay(RoundedRectangle(cornerRadius: 25).stroke(colorScheme == .dark ? Theme.border : Theme.blue.opacity(0.06))).shadow(color: .black.opacity(colorScheme == .dark ? 0.35 : 0.055), radius: 15, y: 7)
+                .background(colorScheme == .dark ? Theme.input : Theme.surface, in: StudioShape(25, pixel: pixel)).overlay(StudioShape(25, pixel: pixel).stroke(colorScheme == .dark ? Theme.border : Theme.blue.opacity(0.06), lineWidth: pixel ? 2 : 1))
+                .studioShadow(pixel: pixel, color: .black.opacity(colorScheme == .dark ? 0.35 : 0.055), radius: 15, y: 7)
         }.frame(maxWidth: 760).padding(.horizontal, 30).padding(.vertical, 12)
+    }
+
+    /// MD-16: which templates and servers the director may plan with. Defaults to the project's modules and healthy servers.
+    private var directorScopeMenu: some View {
+        let current = directorScope.wrappedValue ?? store.defaultDirectorScope(projectID: lockedProjectID ?? projectID)
+        func toggle(_ id: UUID, templates: Bool) -> Binding<Bool> {
+            Binding(get: { (templates ? current.templateIDs : current.serverIDs).contains(id) }, set: { on in
+                var scope = current
+                if templates { if on { scope.templateIDs.insert(id) } else { scope.templateIDs.remove(id) } }
+                else { if on { scope.serverIDs.insert(id) } else { scope.serverIDs.remove(id) } }
+                directorScope.wrappedValue = scope
+            })
+        }
+        return Menu {
+            Section("可用的模板") { ForEach(store.snapshot.templates.current) { template in Toggle(template.name, isOn: toggle(template.id, templates: true)) } }
+            Section("可用的服务器") {
+                ForEach(store.enabledServers) { server in
+                    Toggle(server.name + (store.serverHealth[server.id]?.usable == false ? "（上次检测未通过）" : ""), isOn: toggle(server.id, templates: false))
+                }
+            }
+            Divider()
+            Button("恢复默认（本项目工作区的模板、可用的服务器）") { directorScope.wrappedValue = nil }
+        } label: {
+            Label("\(current.templateIDs.count) 个模板 · \(current.serverIDs.count) 台服务器", systemImage: "slider.horizontal.3").font(.system(size: 10))
+        }.menuStyle(.borderlessButton).fixedSize().help("导演只能在这些模板和服务器里规划").accessibilityIdentifier("composer.director-scope")
     }
 
     private var contextRow: some View {
@@ -88,13 +123,14 @@ struct ChatComposerView: View {
                 HStack(spacing: 4) {
                     if mode == .team && index == 0 { Image(systemName: "star.fill").font(.system(size: 8)).foregroundStyle(.orange).help("负责人") }
                     Text(agent.name)
-                    Button { agentIDs.removeAll { $0 == agent.id } } label: { Image(systemName: "xmark").font(.system(size: 8)) }.buttonStyle(.plain).accessibilityLabel("移除 " + agent.name)
+                    Button { agentIDs.removeAll { $0 == agent.id } } label: { Image(systemName: "xmark").font(.system(size: 8)) }.buttonStyle(.plainPointer).accessibilityLabel("移除 " + agent.name)
                 }.padding(.horizontal, 8).padding(.vertical, 3).background(accent.opacity(0.1), in: Capsule())
                     .contextMenu { if mode == .team && index > 0 { Button("设为负责人") { agentIDs.removeAll { $0 == agent.id }; agentIDs.insert(agent.id, at: 0) } } }
             }
             if agents.count == 1 && !store.snapshot.templates.current.isEmpty && !store.enabledServers.isEmpty {
                 Toggle("导演", isOn: Binding(get: { mode == .director }, set: { mode = $0 ? .director : .single })).toggleStyle(.switch).controlSize(.mini)
                     .help("让 TA 把需求变成制作计划：在服务器上运行工作流模板，你确认参数和预算后才提交").accessibilityIdentifier("composer.director")
+                if mode == .director { directorScopeMenu }
             }
             if agents.count >= 2 {
                 Picker("模式", selection: $mode) { Text("并行").tag(ChatMode.parallel); Text("团队").tag(ChatMode.team) }.pickerStyle(.segmented).labelsHidden().frame(width: 110)
@@ -110,7 +146,7 @@ struct ChatComposerView: View {
             ForEach(attachments, id: \.self) { path in
                 HStack(spacing: 4) {
                     Image(systemName: "doc"); Text((path as NSString).lastPathComponent).lineLimit(1)
-                    Button { attachments.removeAll { $0 == path } } label: { Image(systemName: "xmark").font(.system(size: 8)) }.buttonStyle(.plain)
+                    Button { attachments.removeAll { $0 == path } } label: { Image(systemName: "xmark").font(.system(size: 8)) }.buttonStyle(.plainPointer)
                 }.padding(.horizontal, 8).padding(.vertical, 3).background(Color.secondary.opacity(0.1), in: Capsule()).help(path)
             }
             Spacer(minLength: 0)
@@ -158,13 +194,13 @@ struct ConversationListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Button { selection = nil } label: { Label("新对话", systemImage: "plus.bubble").frame(maxWidth: .infinity, alignment: .leading) }
-                .buttonStyle(.bordered).accessibilityIdentifier("conversations.new")
+                .buttonStyle(.borderedPointer).accessibilityIdentifier("conversations.new")
             if let id = selection, let conversation = store.conversation(id), !conversation.isDeleted {
                 HStack {
                     Button("重命名") { newTitle = conversation.title; renaming = conversation }
                     Spacer()
                     Button("删除对话", role: .destructive) { store.pendingDeletion = DeletionTarget(.conversation, id) }
-                }.font(.system(size: 10)).buttonStyle(.link)
+                }.font(.system(size: 10)).buttonStyle(.linkPointer)
             }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 4) {
@@ -196,7 +232,7 @@ struct ConversationListView: View {
             }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
                 .background(selection == conversation.id ? accent.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain)
+        }.buttonStyle(.plainPointer)
             .contextMenu { Button("重命名…") { newTitle = conversation.title; renaming = conversation }; Button("删除对话", role: .destructive) { store.pendingDeletion = DeletionTarget(.conversation, conversation.id) } }
             .accessibilityLabel(conversation.title + (active ? "，正在回复" : ""))
     }
@@ -343,7 +379,7 @@ private struct TurnCard: View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 3) {
                 ForEach(files.prefix(80), id: \.self) { Text($0).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled) }
-                Button("查看差异") { showDiff = true }.buttonStyle(.link).font(.system(size: 10))
+                Button("查看差异") { showDiff = true }.buttonStyle(.linkPointer).font(.system(size: 10))
             }.padding(.top, 4)
         } label: { Text("改动了 \(files.count) 个文件").font(.system(size: 10)).foregroundStyle(.orange) }
             .sheet(isPresented: $showDiff) {
@@ -373,7 +409,7 @@ private struct TurnCard: View {
             }
             Spacer(minLength: 0)
             if let usage = turn.usage { Text(Self.usage(usage)).font(.system(size: 9)).foregroundStyle(.secondary) }
-        }.font(.system(size: 10)).buttonStyle(.link)
+        }.font(.system(size: 10)).buttonStyle(.linkPointer)
     }
 
     private func duration(from start: Date) -> String {
@@ -448,7 +484,7 @@ private struct PlanCard: View {
                     HStack(spacing: 10) {
                         if task.status == .review && task.purpose != .planning { Button("验收") { store.accept(task.id) } }
                         Button("详情") { onOpenTask(task.id) }
-                    }.font(.system(size: 10)).buttonStyle(.link)
+                    }.font(.system(size: 10)).buttonStyle(.linkPointer)
                 }.padding(.vertical, 3)
             }
             HStack(spacing: 12) {
@@ -456,7 +492,7 @@ private struct PlanCard: View {
                 Button("停止整个计划") { store.stopPlan(plan.id) }.tint(.red)
                 Spacer()
                 Text(plan.reviewerID.flatMap { store.employee($0)?.name }.map { "AI 审核：\($0) · 返工上限 \(plan.maximumReworks) 次" } ?? "人工验收").font(.system(size: 9)).foregroundStyle(.secondary)
-            }.font(.system(size: 10)).buttonStyle(.link).disabled(done == tasks.count)
+            }.font(.system(size: 10)).buttonStyle(.linkPointer).disabled(done == tasks.count)
         }
     }
 }
@@ -498,7 +534,7 @@ struct WorktreePanel: View {
                         Button("合并到项目") { working = true; Task { await store.mergeWorktree(task.id); working = false } }.disabled(working || ![.review, .completed].contains(task.status))
                         Button("放弃改动", role: .destructive) { working = true; Task { await store.discardWorktree(task.id); working = false } }.disabled(working || task.status == .running)
                         if working { ProgressView().controlSize(.small) }
-                    }.buttonStyle(.bordered).font(.system(size: 10))
+                    }.buttonStyle(.borderedPointer).font(.system(size: 10))
                     Text("合并会在 worktree 分支上提交改动，再合并到项目当前分支；有冲突时留给你在终端处理。").font(.system(size: 9)).foregroundStyle(.secondary)
                 }
             }

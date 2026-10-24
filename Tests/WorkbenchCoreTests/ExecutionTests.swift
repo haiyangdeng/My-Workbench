@@ -22,6 +22,36 @@ final class ExecutionTests: XCTestCase {
         for _ in 0..<100 where kill(child, 0) == 0 { try await Task.sleep(nanoseconds: 20_000_000) }
         XCTAssertEqual(kill(child, 0), -1); XCTAssertEqual(errno, ESRCH)
     }
+    /// Codex runs each shell command in a new process group, so killing the CLI's group alone leaves it running.
+    func testCancelStopsChildInItsOwnProcessGroup() async throws {
+        let root = try folder(); defer { try? FileManager.default.removeItem(at: root) }
+        let pidFile = root.appendingPathComponent("child.pid")
+        let runner = ProcessRunner(), id = UUID()
+        let script = "/usr/bin/perl -e 'setpgrp(0, 0); sleep 60' & echo $! > child.pid; wait"
+        let job = Task { try await runner.run(id: id, tool: ToolConfig(name: "own group", executable: "/bin/sh", arguments: ["-c", script]), input: "", directory: root.path, onOutput: { _ in }) }
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: pidFile.path) { try await Task.sleep(nanoseconds: 10_000_000) }
+        let child = try XCTUnwrap(Int32(String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        for _ in 0..<100 where getpgid(child) != child { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(getpgid(child), child, "The child leads its own process group, as Codex's commands do")
+        runner.cancel(id: id)
+        let result = try await job.value
+        XCTAssertEqual(result.status, .cancelled)
+        for _ in 0..<150 where kill(child, 0) == 0 { try await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertEqual(kill(child, 0), -1, "Stop must reach a command the CLI started in another process group")
+    }
+    /// A CLI that exits normally must not leave a command it started behind (holding the output pipe or running on).
+    func testNormalExitStopsOrphanedChildInItsOwnGroup() async throws {
+        let root = try folder(); defer { try? FileManager.default.removeItem(at: root) }
+        let pidFile = root.appendingPathComponent("child.pid")
+        let script = "/usr/bin/perl -e 'setpgrp(0, 0); sleep 60' & echo $! > child.pid; /bin/sleep 1.6; exit 0"
+        let started = Date()
+        let result = try await ProcessRunner().run(id: UUID(), tool: ToolConfig(name: "orphan", executable: "/bin/sh", arguments: ["-c", script]), input: "", directory: root.path, onOutput: { _ in })
+        XCTAssertEqual(result.status, .review)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 10, "The run must not wait for the orphan to exit on its own")
+        let child = try XCTUnwrap(Int32(String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        for _ in 0..<150 where kill(child, 0) == 0 { try await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertEqual(kill(child, 0), -1)
+    }
     func testTimeoutEscalatesAndPreservesOutput() async throws {
         var tool = ToolConfig(name: "timeout", executable: "/bin/sh", arguments: ["-c", "trap '' TERM; printf 'before timeout'; while :; do sleep 1; done"])
         tool.timeoutSeconds = 0.1

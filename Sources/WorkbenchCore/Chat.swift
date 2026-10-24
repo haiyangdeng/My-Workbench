@@ -72,6 +72,9 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     public var mode: ChatMode?
     public var access: AccessLevel?
     public var leadID: UUID?
+    /// Director mode (MD-16): the templates and servers the director may use for this message.
+    public var directorTemplateIDs: [UUID]?
+    public var directorServerIDs: [UUID]?
     // Agent turns
     public var agentID: UUID?
     public var replyToID: UUID?
@@ -162,6 +165,11 @@ public enum TurnDiagnosis {
         let loginHints = ["not logged in", "please run /login", "please log in", "authentication required", "invalid api key", "unauthorized"]
         if (!marker.isEmpty && text.localizedCaseInsensitiveContains(marker)) || loginHints.contains(where: { text.localizedCaseInsensitiveContains($0) }) {
             return "CLI 没有登录。在“工具连接”中点“在终端登录”，完成后再发送。"
+        }
+        let quotaHints = ["usage limit", "rate limit", "rate_limit", "insufficient_quota", "quota exceeded", "credit balance is too low", "too many requests"]
+        if quotaHints.contains(where: { text.localizedCaseInsensitiveContains($0) }) {
+            let retry = text.range(of: #"try again (at|in) [^.\n]+"#, options: [.regularExpression, .caseInsensitive]).map { "（CLI 提示：\(text[$0])）" } ?? ""
+            return "CLI 账号的用量额度已用完或被限流\(retry)。额度恢复后再发送；团队和制作计划会在失败的步骤处暂停，恢复后可以继续。"
         }
         let reason = summary.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? String(outputTail.trimmingCharacters(in: .whitespacesAndNewlines).suffix(600)).nonEmpty ?? "没有输出。"
         return "CLI 退出码 \(exitCode.map(String.init) ?? "未知")：\(reason)"

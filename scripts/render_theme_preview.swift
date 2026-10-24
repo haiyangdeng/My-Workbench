@@ -37,8 +37,8 @@ import SwiftTerm
         window.contentView = hosting; window.orderBack(nil)
         defer { terminals.endAll(); window.orderOut(nil) }
         var screenshots: [String] = [], measurements: [[String: Any]] = []
-        func render(_ name: String, page: StudioPage = .home, dark: Bool, osDark: Bool? = nil, width: CGFloat = 1440, height: CGFloat = 900, source: WorkbenchStore? = nil, editor: Bool = false) async throws {
-            preferences.set(dark ? "ink" : "paper", forKey: "studioThemeV06")
+        func render(_ name: String, page: StudioPage = .home, dark: Bool, style: StudioStyle? = nil, osDark: Bool? = nil, width: CGFloat = 1440, height: CGFloat = 900, source: WorkbenchStore? = nil, editor: Bool = false) async throws {
+            preferences.set((style ?? (dark ? .ink : .paper)).rawValue, forKey: "studioThemeV06")
             window.appearance = NSAppearance(named: (osDark ?? dark) ? .darkAqua : .aqua)
             hosting.appearance = window.appearance
             if editor {
@@ -80,6 +80,20 @@ import SwiftTerm
         try await render("dark-employee-editor", dark: true, width: 600, height: 740, editor: true)
         let empty = WorkbenchStore(fileURL: root.appendingPathComponent("empty/workspace.sqlite"))
         try await render("dark-empty", dark: true, source: empty)
+        try await render("pixel-home", dark: true, style: .pixel)
+        try await render("pixel-compact", dark: true, style: .pixel, width: 1100, height: 720)
+        try await render("pixel-employees", page: .employees, dark: true, style: .pixel)
+        try await render("pixel-tools", page: .tools, dark: true, style: .pixel)
+        try await render("pixel-settings", page: .settings, dark: true, style: .pixel)
+        try await render("pixel-empty", dark: true, style: .pixel, source: empty)
+        // Ink after pixel: both are dark, so this proves the ink palette comes back after switching styles.
+        try await render("ink-after-pixel", dark: true)
+        let inkSidebar = measurements.first { $0["name"] as? String == "dark-home" }?["sidebarMean"] as? Double
+        let pixelSidebar = measurements.first { $0["name"] as? String == "pixel-home" }?["sidebarMean"] as? Double
+        let returnedSidebar = measurements.first { $0["name"] as? String == "ink-after-pixel" }?["sidebarMean"] as? Double
+        precondition(inkSidebar != nil && pixelSidebar != nil && returnedSidebar != nil, "Missing style measurements")
+        precondition(abs(inkSidebar! - returnedSidebar!) < 0.005, "Ink must look the same after switching back from pixel")
+        precondition(abs(inkSidebar! - pixelSidebar!) > 0.005, "Pixel must use its own palette")
         try await render("light-home", dark: false)
         try await render("light-os-dark", dark: false, osDark: true, width: 1100, height: 720)
         let report: [String: Any] = ["passed": true, "screenshots": screenshots, "measurements": measurements, "noExecution": true,

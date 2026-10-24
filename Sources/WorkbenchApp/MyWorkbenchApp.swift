@@ -25,7 +25,9 @@ struct MyWorkbenchApp: App {
     var body: some Scene {
         WindowGroup("Workbench") {
             WorkbenchView(terminals: terminals, store: store)
-                .onAppear { delegate.store = store; delegate.terminals = terminals }
+                // Buttons without a style of their own show the pointing hand too; AppKit controls get it from the monitor.
+                .buttonStyle(.automaticPointer)
+                .onAppear { delegate.store = store; delegate.terminals = terminals; PointerCursorMonitor.shared.install() }
                 .frame(minWidth: 1100, minHeight: 720)
         }
         .defaultSize(width: 1440, height: 900)
