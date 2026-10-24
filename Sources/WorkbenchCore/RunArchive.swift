@@ -1,6 +1,8 @@
 import Foundation
 
 public struct RunArchive: Sendable {
+    /// Workbench's own record of an Edit run's project changes, inside the run's outputs but in a folder agents don't use.
+    public static let changeEvidencePath = ".workbench/changes.diff"
     public let root: URL
     public init(root: URL) { self.root = root }
     public func directory(runID: UUID, projectID: UUID?) -> URL {
@@ -13,11 +15,16 @@ public struct RunArchive: Sendable {
             throw NSError(domain: "MyWorkbench.Archive", code: 1, userInfo: [NSLocalizedDescriptionKey: "执行编号已存在，不能覆盖旧记录。"])
         }
         try FileManager.default.createDirectory(at: directory.appendingPathComponent("output"), withIntermediateDirectories: true)
+        // Check again after creating: a folder swapped for a link between the check and the create is caught here.
+        _ = try outputDirectory(runID: runID, projectID: projectID)
         return directory
+    }
+    private func outputComponents(runID: UUID, projectID: UUID?) -> [String] {
+        ["projects", projectID?.uuidString ?? "unassigned", "runs", runID.uuidString, "output"]
     }
     /// Check every directory below the configured archive root, including a replaced run or project folder.
     private func outputDirectory(runID: UUID, projectID: UUID?, allowMissing: Bool = false) throws -> URL {
-        let components = ["projects", projectID?.uuidString ?? "unassigned", "runs", runID.uuidString, "output"]
+        let components = outputComponents(runID: runID, projectID: projectID)
         var output = root.standardizedFileURL
         for component in components {
             output.appendPathComponent(component, isDirectory: true)
@@ -47,11 +54,15 @@ public struct RunArchive: Sendable {
         }
         return result.sorted { $0.relativePath < $1.relativePath }
     }
+    /// Called from lists and previews, so it skips the per-folder walk: the file's real location has to be inside the run's
+    /// real output folder, which a replaced run, project or output folder can't satisfy.
     public func url(for artifact: WorkArtifact) throws -> URL {
         guard !artifact.relativePath.hasPrefix("/"), !artifact.relativePath.split(separator: "/").contains("..") else { throw WorkbenchError.unsafeArtifact }
         let file = root.appendingPathComponent(artifact.relativePath).standardizedFileURL
-        let owned = try outputDirectory(runID: artifact.runID, projectID: artifact.projectID)
-        guard file.path.hasPrefix(owned.path + "/"), file.resolvingSymlinksInPath().path.hasPrefix(owned.resolvingSymlinksInPath().path + "/") else { throw WorkbenchError.unsafeArtifact }
+        let components = outputComponents(runID: artifact.runID, projectID: artifact.projectID)
+        let owned = components.reduce(root.standardizedFileURL) { $0.appendingPathComponent($1, isDirectory: true) }
+        let real = components.reduce(root.resolvingSymlinksInPath().standardizedFileURL) { $0.appendingPathComponent($1, isDirectory: true) }
+        guard file.path.hasPrefix(owned.path + "/"), file.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(real.path + "/") else { throw WorkbenchError.unsafeArtifact }
         let values = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
         guard values.isRegularFile == true, values.isSymbolicLink != true else { throw WorkbenchError.unsafeArtifact }
         return file

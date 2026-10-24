@@ -51,21 +51,28 @@ document.querySelector('.dialog-close').addEventListener('click', () => dialog.c
 dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
 dialog.addEventListener('close', () => zoomTrigger?.focus());
 
+// The visible label changes; the status region tells screen readers what happened.
 document.querySelectorAll('[data-copy]').forEach(button => {
+  const label = button.querySelector('.copy-label');
+  const status = button.parentElement.querySelector('[data-copy-status]');
+  let reset;
   button.addEventListener('click', async () => {
     const source = document.getElementById(button.dataset.copy);
     if (!source) return;
     try {
       await navigator.clipboard.writeText(source.textContent.trim());
-      button.textContent = 'Copied';
+      label.textContent = 'Copied';
+      status.textContent = 'Command copied to the clipboard.';
     } catch {
       const range = document.createRange();
       range.selectNodeContents(source);
       const selection = window.getSelection();
       selection.removeAllRanges();
       selection.addRange(range);
-      button.textContent = 'Selected';
+      label.textContent = 'Selected';
+      status.textContent = 'Command selected. Press Command-C to copy it.';
     }
-    setTimeout(() => { button.textContent = 'Copy'; }, 1800);
+    clearTimeout(reset);
+    reset = setTimeout(() => { label.textContent = 'Copy'; status.textContent = ''; }, 1800);
   });
 });

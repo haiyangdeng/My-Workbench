@@ -547,13 +547,15 @@ extension WorkbenchStore {
         }
     }
 
-    private func validateDirectorScope(_ draft: PlanDraft, user: ChatMessage) throws {
+    /// Generate steps may only use the templates and servers recorded on the request. The director is asked to re-plan;
+    /// at approval the sheet only offers those, so a mismatch there is the user's pick and is worded for them.
+    private func validateDirectorScope(_ draft: PlanDraft, user: ChatMessage, approving: Bool = false) throws {
         for step in draft.steps where step.stepKind == .generate {
             if let ids = user.directorTemplateIDs, !ids.contains(where: { $0 == step.templateID }) {
-                throw MediaError.invalidStep("「\(step.title)」使用了本次需求未授权的模板，请在已选模板范围内规划")
+                throw MediaError.invalidStep("「\(step.title)」使用了本次需求未授权的模板，" + (approving ? "请改选本次需求范围内的模板" : "请在已选模板范围内规划"))
             }
             if let ids = user.directorServerIDs, !ids.contains(where: { $0 == step.serverID }) {
-                throw MediaError.invalidStep("「\(step.title)」使用了本次需求未授权的服务器，请在已选服务器范围内规划")
+                throw MediaError.invalidStep("「\(step.title)」使用了本次需求未授权的服务器，" + (approving ? "请改选本次需求范围内的服务器" : "请在已选服务器范围内规划"))
             }
         }
     }
@@ -580,7 +582,7 @@ extension WorkbenchStore {
             try BudgetCap.validate(minutes: budgetMinutes, cost: budgetCost, hasGenerateSteps: draft.steps.contains { $0.stepKind == .generate })
             try draft.validate(workspace: snapshot)
             try snapshot.validateProduction(draft, attachments: attachments)
-            try validateDirectorScope(draft, user: user)
+            try validateDirectorScope(draft, user: user, approving: true)
         } catch { errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription; return nil }
         let planID = UUID(), mapping = Dictionary(uniqueKeysWithValues: draft.steps.map { ($0.id, UUID()) })
         var tasks: [WorkTask] = []

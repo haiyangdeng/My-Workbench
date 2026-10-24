@@ -80,6 +80,8 @@ public struct WorkArtifact: Identifiable, Codable, Equatable, Sendable {
         self.id = id; self.taskID = taskID; self.runID = runID; self.projectID = projectID
         self.relativePath = relativePath; self.byteCount = byteCount; self.fileType = fileType; self.accepted = accepted
     }
+    /// The change record Workbench saves for review, not a deliverable: kept out of the asset library and counts.
+    public var isChangeEvidence: Bool { relativePath.hasSuffix("/output/" + RunArchive.changeEvidencePath) }
 }
 
 public struct WorkHandoff: Identifiable, Codable, Equatable, Sendable {

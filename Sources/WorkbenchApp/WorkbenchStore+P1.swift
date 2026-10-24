@@ -75,8 +75,9 @@ extension WorkbenchStore {
     func changedFiles(since baseline: GitChangeBaseline, directory: String) async -> [String] {
         await GitRepository(directory: directory).changedFiles(since: baseline)
     }
-    /// Saves the files an Edit step changed, with their diff, as `changes.diff` in the run's outputs. Reviewers receive it
-    /// as evidence (TM-07); without it they only see the step's reply and cannot check work done in the project.
+    /// Saves the files an Edit step changed, with their diff, as `.workbench/changes.diff` in the run's outputs, apart from
+    /// anything the agent writes there. Reviewers receive it as evidence (TM-07); without it they only see the step's reply
+    /// and cannot check work done in the project.
     func writeChangeEvidence(files: [String], directory: String, outputDirectory: String, log: RunLog, baseline: GitChangeBaseline? = nil) async {
         guard !files.isEmpty else { return }
         let repository = GitRepository(directory: directory)
@@ -85,7 +86,11 @@ extension WorkbenchStore {
         if diff.utf8.count > limit { diff = String(decoding: Data(diff.utf8.prefix(limit)), as: UTF8.self) + "\n…（差异超过 200 KB，其余已省略）\n" }
         let body = "本次运行在项目中改动的文件（\(files.count) 个）：\n" + files.map { "- " + $0 }.joined(separator: "\n") + "\n\n" + diff
         do {
-            try body.write(to: URL(fileURLWithPath: outputDirectory).appendingPathComponent("changes.diff"), atomically: true, encoding: .utf8)
+            let target = URL(fileURLWithPath: outputDirectory).appendingPathComponent(RunArchive.changeEvidencePath), folder = target.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            // The agent can write to its output folder; never follow a link left in place of ours.
+            guard try folder.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else { throw WorkbenchError.unsafeArtifact }
+            try body.write(to: target, atomically: true, encoding: .utf8)
             log.append("[system] 本次改动了 \(files.count) 个文件，差异已保存为 changes.diff\n")
         } catch { log.append("[system] 改动记录保存失败：\(error.localizedDescription)\n") }
     }
@@ -93,7 +98,7 @@ extension WorkbenchStore {
     /// New turns show their saved run diff; older records retain the live-diff fallback.
     func changedDiff(for turn: ChatMessage, directory: String, files: [String]) async -> String {
         if let runID = turn.runID,
-           let artifact = artifacts(for: runID).first(where: { $0.relativePath.hasSuffix("/output/changes.diff") }),
+           let artifact = artifacts(for: runID).first(where: \.isChangeEvidence),
            let url = try? archive.url(for: artifact), let text = try? String(contentsOf: url, encoding: .utf8) { return text }
         return await diff(directory: directory, files: files)
     }

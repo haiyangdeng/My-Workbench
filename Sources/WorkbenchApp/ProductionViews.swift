@@ -46,6 +46,11 @@ struct ProductionApprovalSheet: View {
             }
     }
 
+    /// The templates and servers this request allowed; approval refuses anything else, so the pickers stay inside it.
+    private var scope: (templates: [WorkflowTemplate], servers: [ComfyServer]) {
+        guard let user = store.message(store.message(turnID)?.replyToID) else { return (store.snapshot.templates.current, store.enabledServers) }
+        return store.directorScope(for: user)
+    }
     private var currency: String { draft.steps.compactMap { store.snapshot.server($0.serverID)?.currency }.first ?? "" }
     private func totalText(_ total: (seconds: Double?, cost: Double?, unknown: Int)) -> String {
         let time = total.seconds.map { String(format: "预计 GPU 时间 %.1f 分钟", $0 / 60) } ?? "\(total.unknown) 个生成步骤的时间未知"
@@ -64,8 +69,8 @@ struct ProductionApprovalSheet: View {
             switch step.stepKind {
             case .generate:
                 HStack {
-                    Picker("模板", selection: Binding(get: { draft.steps[index].templateID }, set: { draft.steps[index].templateID = $0 })) { ForEach(store.snapshot.templates.current) { Text($0.name).tag(Optional($0.id)) } }
-                    Picker("服务器", selection: Binding(get: { draft.steps[index].serverID }, set: { draft.steps[index].serverID = $0 })) { ForEach(store.enabledServers) { Text($0.name).tag(Optional($0.id)) } }
+                    Picker("模板", selection: Binding(get: { draft.steps[index].templateID }, set: { draft.steps[index].templateID = $0 })) { ForEach(scope.templates) { Text($0.name).tag(Optional($0.id)) } }
+                    Picker("服务器", selection: Binding(get: { draft.steps[index].serverID }, set: { draft.steps[index].serverID = $0 })) { ForEach(scope.servers) { Text($0.name).tag(Optional($0.id)) } }
                 }
                 ForEach((draft.steps[index].parameters ?? []).indices, id: \.self) { p in
                     HStack {

@@ -101,30 +101,36 @@ public struct GitRepository: Sendable {
         return output.count > 400_000 ? String(output.prefix(400_000)) + "\n…（差异过长，已截断）" : output
     }
 
-    /// Initial HEAD plus copies of already-dirty files. No staging, commits or refs are changed.
+    /// Starting copies are capped per file and in total, so a project with large or un-ignored generated files doesn't
+    /// duplicate them on every Edit run. Files over the caps keep only their fingerprint.
+    public static let baselineFileLimit = 8 * 1024 * 1024
+    public static let baselineCopyBudget = 256 * 1024 * 1024
+
+    /// Initial HEAD plus copies of already-dirty files. No staging, commits or refs are changed. A file that can't be
+    /// copied (over the caps, or changed or removed meanwhile) keeps its fingerprint, and its diff falls back to HEAD.
     public func changeBaseline() async -> GitChangeBaseline? {
         guard var status = await status() else { return nil }
         let head = await head(), directory = directory
         if let head {
             let paths = await run(["diff", "--no-renames", "--name-only", "-z", head, "--"], timeout: 30)
-            for file in paths.output.split(separator: "\0").map(String.init) where status[file] == nil { status[file] = " D" }
+            if paths.status == 0 { for file in paths.output.split(separator: "\0").map(String.init) where status[file] == nil { status[file] = " D" } }
         }
         let initialStatus = status
         return await Task.detached {
             let copies = FileManager.default.temporaryDirectory.appendingPathComponent("workbench-baseline-\(UUID())")
-            do {
-                try FileManager.default.createDirectory(at: copies, withIntermediateDirectories: true)
-                let content = Self.fingerprints(directory: directory, files: Array(initialStatus.keys))
-                for file in content.keys {
-                    let target = copies.appendingPathComponent(file)
+            let content = Self.fingerprints(directory: directory, files: Array(initialStatus.keys))
+            var saved: Set<String> = [], budget = Self.baselineCopyBudget
+            for file in content.keys.sorted() {
+                let source = URL(fileURLWithPath: directory).appendingPathComponent(file), target = copies.appendingPathComponent(file)
+                let size = (try? source.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                guard size <= Self.baselineFileLimit, size <= budget else { continue }
+                do {
                     try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    try FileManager.default.copyItem(at: URL(fileURLWithPath: directory).appendingPathComponent(file), to: target)
-                }
-                return GitChangeBaseline(head: head, status: initialStatus, content: content, copies: copies)
-            } catch {
-                try? FileManager.default.removeItem(at: copies)
-                return nil
+                    try FileManager.default.copyItem(at: source, to: target)
+                    saved.insert(file); budget -= size
+                } catch { continue }
             }
+            return GitChangeBaseline(head: head, status: initialStatus, content: content, saved: saved, copies: copies)
         }.value
     }
 
@@ -146,17 +152,28 @@ public struct GitRepository: Sendable {
     /// Compare to the actual starting contents, including edits committed by the CLI and pre-existing user edits.
     public func diff(files: [String], since baseline: GitChangeBaseline) async -> String {
         let clean = files.filter { baseline.status[$0] == nil }
+        // Dirty at the start but not copied: the best available comparison is HEAD, which includes the earlier edits.
+        let unsaved = files.filter { baseline.status[$0] != nil && baseline.content[$0] != nil && !baseline.saved.contains($0) }
         var output = ""
-        if let head = baseline.head { output = await diff(files: clean, against: head) }
-        for file in files where baseline.status[file] != nil || baseline.head == nil {
+        if !unsaved.isEmpty {
+            output = "# 这些文件的起始内容没有保存（文件过大或无法复制），" + (baseline.head == nil ? "无法显示差异" : "差异相对于 HEAD，含运行前已有的改动") + "：" + unsaved.joined(separator: "、") + "\n"
+        }
+        if let head = baseline.head { output += await diff(files: clean + unsaved, against: head) }
+        for file in files where (baseline.status[file] != nil || baseline.head == nil) && !unsaved.contains(file) {
             let old = baseline.content[file] == nil ? "/dev/null" : baseline.copies.appendingPathComponent(file).path
             let newURL = URL(fileURLWithPath: directory).appendingPathComponent(file)
             let new = Self.fingerprints(directory: directory, files: [file])[file] == nil ? "/dev/null" : newURL.path
             guard old != new else { continue }
             let result = await run(["-c", "core.quotePath=false", "diff", "--no-index", "--no-prefix", "--", old, new], timeout: 30)
+            // Every metadata line before the first hunk (diff, index, ---/+++, "Binary files … differ") names the two
+            // absolute paths, which git prints without their leading "/"; hunk lines are file content and stay as written.
+            var header = false
             output += result.output.components(separatedBy: "\n").map { line in
-                guard line.hasPrefix("diff --git ") || line.hasPrefix("--- ") || line.hasPrefix("+++ ") else { return line }
-                return line.replacingOccurrences(of: baseline.copies.path + "/", with: "a/").replacingOccurrences(of: URL(fileURLWithPath: directory).path + "/", with: "b/")
+                if line.hasPrefix("diff --git ") { header = true } else if line.hasPrefix("@@") { header = false }
+                guard header else { return line }
+                return [(baseline.copies.path + "/", "a/"), (URL(fileURLWithPath: directory).path + "/", "b/")].reduce(line) { line, prefix in
+                    line.replacingOccurrences(of: prefix.0, with: prefix.1).replacingOccurrences(of: String(prefix.0.dropFirst()), with: prefix.1)
+                }
             }.joined(separator: "\n")
         }
         return output
@@ -185,9 +202,11 @@ public final class GitChangeBaseline: @unchecked Sendable {
     public let head: String?
     public let status: [String: String]
     public let content: [String: String]
+    /// Files whose starting contents were copied; the rest of `content` is fingerprint-only.
+    public let saved: Set<String>
     fileprivate let copies: URL
-    fileprivate init(head: String?, status: [String: String], content: [String: String], copies: URL) {
-        self.head = head; self.status = status; self.content = content; self.copies = copies
+    fileprivate init(head: String?, status: [String: String], content: [String: String], saved: Set<String>, copies: URL) {
+        self.head = head; self.status = status; self.content = content; self.saved = saved; self.copies = copies
     }
     deinit { try? FileManager.default.removeItem(at: copies) }
 }

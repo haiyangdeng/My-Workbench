@@ -20,7 +20,7 @@ extension WorkbenchStore {
             if task.status == .running || task.status == .queued { counts.running += 1 }
             if task.status == .review { counts.review += 1 }
         }
-        counts.assets = snapshot.artifacts.current.filter { $0.projectID == project.id }.count
+        counts.assets = snapshot.artifacts.current.filter { $0.projectID == project.id && !$0.isChangeEvidence }.count
         return counts
     }
 

@@ -93,7 +93,7 @@ It builds the universal app (x86_64 + arm64, ad hoc signed) and writes `Workbenc
 
 | Command | What it covers |
 | --- | --- |
-| `swift test` | 117 unit tests for the core: CLI definitions and output parsing, process control, git, budgets, servers, persistence |
+| `swift test` | 120 unit tests for the core: CLI definitions and output parsing, process control, git, budgets, servers, persistence |
 | `zsh scripts/verify_m5.sh` … `verify_m9.sh`, `verify_crud.sh` | The real app store and views, driven with stand-in CLIs and a stand-in ComfyUI server |
 | `zsh scripts/verify_servers.sh` | On-demand GPU servers with a stand-in `ssh`. Add `--real-codex` for a Codex-directed image (calls the model) |
 | `zsh scripts/verify_real_codex.sh` | About 20 real Codex turns covering chat, edits, stop, restart, team plans, reviews and director mode (needs a signed-in Codex and uses its quota) |

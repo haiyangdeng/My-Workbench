@@ -124,9 +124,11 @@ import SwiftTerm
                     let count = store.snapshot.tasks.count
                     let approved = store.approveProductionPlan(messageID: turn.id, draft: draft, budgetMinutes: 1, budgetCost: nil, directorReview: false, maximumReworks: 0)
                     precondition(approved == nil && store.snapshot.tasks.count == count && store.activeRuns.isEmpty)
+                    precondition(store.errorMessage?.contains("请改选本次需求范围内的") == true, "Approval errors address the user, not the director")
                 }
             }
-            checks.append("Excluded templates and servers were refused on response and approval; the authorized plan was accepted")
+            precondition(store.directorScope(for: user).templates.map(\.id) == [allowedTemplate.id] && store.directorScope(for: user).servers.map(\.id) == [allowedServer.id])
+            checks.append("Excluded templates and servers were refused on response and approval; the approval pickers only offer the recorded scope")
         }
         do {
             let (store, _, _) = fixture("saved-git-evidence")
@@ -143,7 +145,7 @@ import SwiftTerm
             let evidenceFolder = root.appendingPathComponent("evidence"); try FileManager.default.createDirectory(at: evidenceFolder, withIntermediateDirectories: true)
             let log = try RunLog(url: root.appendingPathComponent("evidence.log"))
             await store.writeChangeEvidence(files: changed, directory: repository.path, outputDirectory: evidenceFolder.path, log: log, baseline: baseline); try log.close()
-            let text = try String(contentsOf: evidenceFolder.appendingPathComponent("changes.diff"), encoding: .utf8)
+            let text = try String(contentsOf: evidenceFolder.appendingPathComponent(RunArchive.changeEvidencePath), encoding: .utf8)
             precondition(text.contains("+agent") && !text.contains("+user"))
             checks.append("Unicode committed edits produced changes.diff against the actual starting contents")
         }

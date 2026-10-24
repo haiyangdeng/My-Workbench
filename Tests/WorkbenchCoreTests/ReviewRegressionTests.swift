@@ -71,6 +71,7 @@ final class ReviewRegressionTests: XCTestCase {
         let diff = await git.diff(files: changes, since: before)
         XCTAssertEqual(diff.components(separatedBy: "+agent").count - 1, names.count)
         XCTAssertFalse(diff.contains("+user"), "Only changes since the actual starting contents belong to this run")
+        XCTAssertTrue(diff.contains("+++ b/中文说明.md")); XCTAssertFalse(diff.contains("workbench-baseline"))
         let newName = "新增\n\" -> :*.md"
         try "untracked content\n".write(to: root.appendingPathComponent(newName), atomically: true, encoding: .utf8)
         let untrackedDiff = await git.diff(files: [newName])
@@ -133,5 +134,46 @@ final class ReviewRegressionTests: XCTestCase {
         let changes = await git.changedFiles(since: before)
         let diff = await git.diff(files: changes, since: before)
         XCTAssertEqual(changes, ["first.txt"]); XCTAssertTrue(diff.contains("+agent")); XCTAssertFalse(diff.contains("+user"))
+    }
+
+    func testGitBaselineKeepsFingerprintOnlyForFilesOverTheCopyLimit() async throws {
+        let root = try folder(); defer { try? FileManager.default.removeItem(at: root) }
+        let git = try await repository(root)
+        let big = root.appendingPathComponent("big.bin"), notes = root.appendingPathComponent("notes.txt")
+        try Data([0]).write(to: big); _ = await git.commitAll(message: "binary")
+        try Data(repeating: 0, count: GitRepository.baselineFileLimit + 1).write(to: big)
+        try "original\nuser\n".write(to: notes, atomically: true, encoding: .utf8)
+        let before = try await baseline(git)
+        XCTAssertEqual(before.saved, ["notes.txt"]); XCTAssertNotNil(before.content["big.bin"])
+        try Data(repeating: 1, count: GitRepository.baselineFileLimit + 1).write(to: big)
+        try "original\nuser\nagent\n".write(to: notes, atomically: true, encoding: .utf8)
+        let changes = await git.changedFiles(since: before)
+        XCTAssertEqual(changes, ["big.bin", "notes.txt"])
+        let diff = await git.diff(files: changes, since: before)
+        XCTAssertTrue(diff.contains("差异相对于 HEAD") && diff.contains("big.bin"), diff)
+        XCTAssertTrue(diff.contains("+agent")); XCTAssertFalse(diff.contains("+user"))
+    }
+
+    func testGitDiffSinceBaselineHidesAbsolutePathsInBinaryAndHeaderLines() async throws {
+        let root = try folder(); defer { try? FileManager.default.removeItem(at: root) }
+        let git = try await repository(root)
+        let image = root.appendingPathComponent("image.png")
+        try Data([0, 1, 2]).write(to: image); _ = await git.commitAll(message: "image")
+        try Data([0, 1, 2, 3]).write(to: image)
+        try "original\n--- \(root.path)/kept\n".write(to: root.appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
+        let before = try await baseline(git)
+        try Data([0, 1, 2, 3, 4]).write(to: image)
+        try "original\n--- \(root.path)/kept\nagent\n".write(to: root.appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
+        let diff = await git.diff(files: await git.changedFiles(since: before), since: before)
+        XCTAssertTrue(diff.contains("Binary files a/image.png and b/image.png differ"), diff)
+        XCTAssertFalse(diff.contains("workbench-baseline"), diff)
+        XCTAssertEqual(diff.components(separatedBy: root.path).count - 1, 1, "Only the file's own content keeps the project path: \(diff)")
+    }
+
+    func testChangeEvidenceIsKeptApartFromDeliverables() {
+        let run = UUID(), task = UUID(), project = UUID()
+        let evidence = WorkArtifact(taskID: task, runID: run, projectID: project, relativePath: "projects/\(project)/runs/\(run)/output/" + RunArchive.changeEvidencePath, byteCount: 1, fileType: "diff")
+        let deliverable = WorkArtifact(taskID: task, runID: run, projectID: project, relativePath: "projects/\(project)/runs/\(run)/output/changes.diff", byteCount: 1, fileType: "diff")
+        XCTAssertTrue(evidence.isChangeEvidence); XCTAssertFalse(deliverable.isChangeEvidence)
     }
 }

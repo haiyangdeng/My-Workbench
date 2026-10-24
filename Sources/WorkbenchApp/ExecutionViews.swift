@@ -15,6 +15,7 @@ struct ArtifactList: View {
     private var items: [WorkArtifact] {
         store.snapshot.artifacts.current.filter { artifact in
             if let runID { return artifact.runID == runID }
+            if artifact.isChangeEvidence { return false }
             if let filter { return filter(artifact) }
             return artifact.projectID == store.activeProjectID
         }
